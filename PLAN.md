@@ -107,3 +107,19 @@ one rather than deferring that migration.
 - 2026-06-21: Architecture decided — multi-tenant SaaS (Postgres + S3),
   initial Codex-oracle review done (see PR/commit history for full
   feedback). `cargo init` scaffold exists. No application code yet.
+- 2026-06-21 (later): Milestone 1 step 1 implemented — minimal Axum+Tokio
+  HTTP server skeleton with `GET /health` returning `ok`, binding
+  `0.0.0.0:3000`. Verified with `cargo build` and a manual curl smoke test
+  (200 ok). Commit `92e178f`, pushed to main.
+  - Oracle verdict: **approved**, confidence high. "Code matches Axum's
+    documented server pattern... remaining concerns are structural
+    readiness issues rather than correctness failures." No blocking
+    issues. Non-blocking suggestions for a later cleanup pass: extract an
+    `app() -> Router` builder for testability, parse the bind address from
+    an env var instead of hardcoding `0.0.0.0:3000`, have `main` return
+    `Result` instead of `.expect()`-ing.
+  - Next run: proceed to the next increment of Milestone 1 — Postgres
+    schema + `sqlx` migrations (start with `users` and `restaurants`
+    tables per the data model above). The bind-address/testability
+    cleanups above can be folded into that step or a later one; they are
+    not a prerequisite.
