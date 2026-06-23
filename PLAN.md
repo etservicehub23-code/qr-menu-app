@@ -220,3 +220,75 @@ one rather than deferring that migration.
     login with argon2 + sessions) rather than building all of CSRF +
     rate limiting + rotation in one step if it doesn't fit a single
     small increment — split further increments across runs as needed.
+- 2026-06-23: Milestone 1 step 3 implemented — owner signup/login slice.
+  Added `src/auth.rs` with signup/login/logout/index handlers, wired
+  into `main.rs` via `tower-sessions` + `tower-sessions-sqlx-store`
+  (Postgres-backed sessions, no local-disk state). Argon2id password
+  hashing on signup; session ID rotated with `cycle_id()` on
+  login/signup (session-fixation prevention); session `flush()`'d on
+  logout. Hit and fixed a real dependency conflict: latest
+  `tower-sessions` (0.15.0) depends on `tower-sessions-core 0.15`,
+  but the latest `tower-sessions-sqlx-store` (0.15.0) only supports
+  `tower-sessions-core 0.14` — pinned `tower-sessions = "=0.14.0"` to
+  match. Also hit and fixed a citext gotcha: `email = $1` compared
+  case-sensitively because sqlx binds the parameter as an explicit
+  `text` type, so Postgres resolved `citext = text` by casting the
+  column down to `text`; fixed with an explicit `$1::citext` cast on
+  every bound email comparison. `cargo build` and `cargo clippy`
+  clean. Verified end-to-end against a throwaway Postgres 16 docker
+  container: signup, login (including case-insensitive email),
+  wrong-password rejection, duplicate-email rejection (409),
+  short-password/blank-email rejection (400), logout, and re-login
+  all behaved correctly. CSRF protection and rate limiting were
+  deliberately deferred to a follow-up increment per the working
+  agreement (kept this slice to signup + login + argon2 + sessions).
+  Commit `69fb94e`, pushed to main.
+  - Oracle verdict: **flagged issues, not a clean approval** (high
+    confidence). Core mechanics judged sound (bound SQL params, Argon2
+    usage, session rotation/flush, the `$1::citext` fix). Concrete
+    issues, ranked:
+    1. **Concrete bug**: the logout link in `src/auth.rs` (`index`
+       handler) renders `<a href="/logout">Log out</a>` (a GET), but
+       the `/logout` route in `main.rs` only accepts POST — clicking
+       the link will 405, logout is effectively broken from the UI.
+    2. No rate limiting on `/login`/`/signup` — online password
+       guessing and cheap Argon2-hash DoS are both possible right now.
+       Oracle: acceptable to defer only as long as this isn't exposed
+       publicly yet (it isn't).
+    3. CSRF still missing — oracle agrees deferring past this slice is
+       reasonable for now, but says it must land before any
+       authenticated state-changing owner workflow (i.e. before
+       Milestone 2's menu CRUD forms).
+    4. Session cookie config is all implicit defaults — no explicit
+       idle/absolute expiry is set (defaults to `None`, i.e.
+       session-only cookie with no server-side expiry), worth setting
+       explicitly later.
+    5. Minor error-handling info leakage: signup's 409 on duplicate
+       email enables email enumeration; the "corrupt password hash"
+       500 message exposes an internal condition. Not blocking, but
+       worth tightening.
+    6. Cosmetic: prefer `tower-sessions = "0.14"` over the exact-pin
+       `"=0.14.0"` so patch releases aren't blocked (the mismatch is
+       at the `tower-sessions-core` major/minor level, not patch).
+    Oracle confirmed the `tower-sessions-sqlx-store` pin/workaround is
+    the right call (no stronger Postgres-backed alternative currently
+    on crates.io for this milestone) and confirmed the `::citext` cast
+    pattern is correct and must be applied to every future bound
+    comparison against `users.email`.
+  - Per the working agreement, this counts as a flagged step: **do not
+    proceed to Milestone 2 (menu CRUD) or any new feature work yet.**
+    Next run must, as a single small revision (not new milestone
+    work): (a) fix the logout link/form to actually POST (e.g. a tiny
+    `<form method="post" action="/logout">` button instead of an `<a>`
+    link), (b) relax the `tower-sessions` pin from `"=0.14.0"` to
+    `"0.14"`, (c) optionally tighten the two info-leak messages if it
+    fits in the same small step. Rate limiting, CSRF, and explicit
+    session expiry remain deferred (not required to clear this flag)
+    but must land before Milestone 2's menu CRUD forms per the
+    oracle's CSRF note above. After making the fix, re-verify the
+    logout flow against a throwaway Postgres container (POST clears
+    the cookie/session, subsequent `/` shows logged-out), then run
+    exactly one codex-oracle prompt asking specifically whether the
+    revision resolves the flagged logout bug. Only once that comes
+    back approved should a subsequent run move on to CSRF/rate
+    limiting or Milestone 2.
