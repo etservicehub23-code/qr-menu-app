@@ -1,5 +1,13 @@
-use axum::{routing::get, Router};
+mod auth;
+
+use auth::AppState;
+use axum::{
+    routing::{get, post},
+    Router,
+};
 use sqlx::postgres::PgPoolOptions;
+use tower_sessions::SessionManagerLayer;
+use tower_sessions_sqlx_store::PostgresStore;
 
 async fn health() -> &'static str {
     "ok"
@@ -21,7 +29,23 @@ async fn main() {
         .await
         .expect("failed to run database migrations");
 
-    let app = Router::new().route("/health", get(health));
+    let session_store = PostgresStore::new(pool.clone());
+    session_store
+        .migrate()
+        .await
+        .expect("failed to run session store migrations");
+    let session_layer = SessionManagerLayer::new(session_store);
+
+    let state = AppState { pool };
+
+    let app = Router::new()
+        .route("/health", get(health))
+        .route("/", get(auth::index))
+        .route("/signup", get(auth::signup_form).post(auth::signup))
+        .route("/login", get(auth::login_form).post(auth::login))
+        .route("/logout", post(auth::logout))
+        .layer(session_layer)
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
         .await
