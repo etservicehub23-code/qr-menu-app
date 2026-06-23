@@ -143,7 +143,7 @@ pub async fn index(session: Session) -> Result<impl IntoResponse, (StatusCode, &
 
     match user_id {
         Some(id) => Ok(Html(format!(
-            "<p>Logged in as user #{id}. <a href=\"/logout\">Log out</a></p>"
+            "<p>Logged in as user #{id}. <form method=\"post\" action=\"/logout\" style=\"display:inline\"><button type=\"submit\">Log out</button></form></p>"
         ))),
         None => Ok(Html(
             "<p>Not logged in. <a href=\"/login\">Log in</a> or <a href=\"/signup\">sign up</a>.</p>"
