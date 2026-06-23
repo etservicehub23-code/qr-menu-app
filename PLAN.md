@@ -292,3 +292,40 @@ one rather than deferring that migration.
     revision resolves the flagged logout bug. Only once that comes
     back approved should a subsequent run move on to CSRF/rate
     limiting or Milestone 2.
+- 2026-06-23 (later): Logout GET/POST bug fix — per the working
+  agreement, revised `src/auth.rs`'s `index` handler to render logout
+  as a `<form method="post" action="/logout">` button instead of the
+  GET `<a href="/logout">` link that the oracle flagged. Also relaxed
+  `Cargo.toml`'s `tower-sessions` pin from the exact-pin `"=0.14.0"`
+  to `"0.14"` per the oracle's prior cosmetic suggestion (Cargo's
+  caret requirement keeps it within `>=0.14.0, <0.15.0`, so it still
+  can't jump to the incompatible `0.15` line). `cargo build` and
+  `cargo clippy` clean. Re-verified against a throwaway Postgres 16
+  docker container: authenticated `/` now shows a working logout
+  button, `POST /logout` clears the session and redirects to
+  `/login`, `GET /logout` correctly 405s. Commit `ce8203b`, pushed to
+  main.
+  - Oracle verdict: **resolved / approved** (high confidence). "Yes,
+    this resolves the flagged logout GET/POST bug." Confirmed
+    `/logout` is POST-only and the rendered form now matches it,
+    confirmed the `tower-sessions = "0.14"` relaxation is safe (caret
+    requirement can't cross into 0.15). One minor non-blocking nit
+    raised: the `<form>` is nested inside a `<p>` tag, which is
+    invalid HTML (browsers auto-repair it, but it's worth a small
+    markup cleanup — wrap in a `<div>`/sibling `<p>` instead of
+    nesting). Oracle also suggested (not blocking) adding a small
+    regression test asserting `GET /logout` is 405, the authenticated
+    index contains a POST logout form, and `POST /logout` clears the
+    session — and reiterated that logout being POST-only is not itself
+    a CSRF defense (CSRF protection is still a prerequisite before
+    Milestone 2's menu CRUD forms, as previously noted, not before
+    this fix).
+  - Next run: the originally flagged step is now resolved — clear to
+    proceed with new work. Per the prior oracle review's ordering,
+    prioritize CSRF protection on the auth forms (signup/login/logout)
+    before starting Milestone 2's menu CRUD work, since CSRF must land
+    before any authenticated state-changing owner workflow. Basic
+    rate limiting on `/login`/`/signup` and the `<p>`-nesting markup
+    cleanup remain valid small follow-ups, but are not blocking and
+    can be folded into the CSRF step or split into their own run if
+    CSRF alone is enough for one increment.
