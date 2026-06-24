@@ -9,7 +9,8 @@ use sqlx::PgPool;
 use tower_sessions::Session;
 
 const USER_ID_KEY: &str = "user_id";
-const CSRF_TOKEN_KEY: &str = "csrf_token";
+const CSRF_TOKENS_KEY: &str = "csrf_tokens";
+const CSRF_TOKEN_POOL_CAP: usize = 16;
 const MIN_PASSWORD_LEN: usize = 8;
 
 #[derive(Clone)]
@@ -29,8 +30,10 @@ pub struct LogoutForm {
     authenticity_token: String,
 }
 
-/// Generates a 32-byte random token, stores it in the session, and returns the
-/// hex-encoded string to embed in the form.
+/// Generates a 32-byte random token, appends it to the per-session CSRF token
+/// pool (capped at CSRF_TOKEN_POOL_CAP to bound session size), and returns the
+/// hex-encoded token to embed in the form. Multiple outstanding tokens coexist,
+/// so opening a second form tab does not invalidate the first.
 async fn new_csrf_token(session: &Session) -> Result<String, (StatusCode, &'static str)> {
     let mut bytes = [0u8; 32];
     OsRng.fill_bytes(&mut bytes);
@@ -45,32 +48,59 @@ async fn new_csrf_token(session: &Session) -> Result<String, (StatusCode, &'stat
             ]
         })
         .collect();
+
+    let mut pool: Vec<String> = session
+        .get(CSRF_TOKENS_KEY)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "session error"))?
+        .unwrap_or_default();
+
+    pool.push(token.clone());
+    if pool.len() > CSRF_TOKEN_POOL_CAP {
+        // Drop oldest tokens to stay within the cap.
+        pool.drain(0..pool.len() - CSRF_TOKEN_POOL_CAP);
+    }
+
     session
-        .insert(CSRF_TOKEN_KEY, token.clone())
+        .insert(CSRF_TOKENS_KEY, &pool)
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to set CSRF token"))?;
+
     Ok(token)
 }
 
-/// Reads the stored CSRF token from the session, compares it to `submitted`,
-/// and removes the token so it is single-use.
+/// Scans the session's CSRF token pool for `submitted`, removes only that
+/// token, and then explicitly calls `session.save()` to persist the removal
+/// to the store before any further handler work. Explicit save ensures the
+/// token is consumed even if a later step in the same request returns 5xx
+/// (tower-sessions normally skips saving on server-error responses).
 async fn verify_csrf_token(
     session: &Session,
     submitted: &str,
 ) -> Result<(), (StatusCode, &'static str)> {
-    let stored: Option<String> = session
-        .get(CSRF_TOKEN_KEY)
+    let mut pool: Vec<String> = session
+        .get(CSRF_TOKENS_KEY)
         .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "session error"))?;
-    let stored = stored.ok_or((StatusCode::FORBIDDEN, "missing CSRF token"))?;
-    // Remove before comparing so an error response still invalidates the token.
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "session error"))?
+        .unwrap_or_default();
+
+    let pos = pool
+        .iter()
+        .position(|t| t == submitted)
+        .ok_or((StatusCode::FORBIDDEN, "invalid or missing CSRF token"))?;
+
+    pool.swap_remove(pos);
+
     session
-        .remove::<String>(CSRF_TOKEN_KEY)
+        .insert(CSRF_TOKENS_KEY, &pool)
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "session error"))?;
-    if stored != submitted {
-        return Err((StatusCode::FORBIDDEN, "invalid CSRF token"));
-    }
+
+    session
+        .save()
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "session error"))?;
+
     Ok(())
 }
 
