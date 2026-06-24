@@ -394,3 +394,46 @@ one rather than deferring that migration.
     pool approach resolves the flagged multi-tab and single-use
     persistence concerns. Only once that comes back approved should a
     subsequent run proceed to Milestone 2's menu CRUD work.
+- 2026-06-24 (evening): Milestone 1 step 4 revision — upgraded CSRF token
+  storage from a single `"csrf_token": String` to a bounded
+  `"csrf_tokens": Vec<String>` pool (cap 16) per the oracle's guidance.
+  `new_csrf_token` loads the existing pool, appends a fresh 32-byte
+  `OsRng` token, drops oldest entries if over the cap, saves. Multiple
+  outstanding tokens coexist so opening a second form tab no longer
+  invalidates the first. `verify_csrf_token` scans the pool for the
+  submitted token, `swap_remove`s only that entry, saves the updated
+  pool, then calls `session.save()` explicitly before returning —
+  persisting the consumption to Postgres immediately so a later 5xx
+  cannot leave the token reusable. Removed the old single `CSRF_TOKEN_KEY`
+  constant. `cargo build` clean. Commit `12cdcfe`, pushed to main.
+  - Oracle verdict: **approved / resolves the flagged concerns**
+    (confidence high). "Yes, this revision resolves the two flagged
+    design flaws for normal sequential request flow... I would accept
+    this as the CSRF foundation for Milestone 2 CRUD forms." Remaining
+    non-blocking notes:
+    1. Concurrent request race is not fixed: two simultaneous POSTs
+       with the same token can both pass (last-write-wins upsert in
+       sqlx-store, no CAS). Not a normal CSRF bypass; acceptable for
+       this project's threat model.
+    2. Parallel multi-tab form generation race: two simultaneous GETs
+       can overwrite each other's pool appends. Sequential multi-tab
+       is fixed; truly parallel is not guaranteed.
+    3. Pool cap (16) is a reasonable UX tradeoff; tests should encode
+       it to guard future CRUD pages.
+    4. Session cookie policy is still implicit defaults (Secure,
+       HttpOnly, SameSite=Strict) — good for HTTPS production; local
+       plain-HTTP browser dev may behave unexpectedly.
+    5. Non-constant-time token comparison remains (acceptable for
+       256-bit random hidden tokens).
+    Oracle's strongest alternative noted for later: store CSRF tokens
+    in a DB table keyed by session_id + token_hash, consumed atomically
+    with `DELETE ... RETURNING 1` for true single-use semantics. Not
+    required before M2; noted as a future hardening option.
+  - Next run: the flagged step is now resolved — proceed to
+    **Milestone 2** work. The smallest first increment of Milestone 2
+    is creating the `restaurants` table-linked owner workflow: a
+    restaurant creation form (POST `/restaurants/new`) that inserts a
+    row into `restaurants` scoped to the logged-in `owner_id`, with
+    slug auto-generated from the name. CSRF token from the pool must
+    be used on the creation form. Rate limiting on login/signup and
+    explicit session cookie config remain deferred non-blockers.
