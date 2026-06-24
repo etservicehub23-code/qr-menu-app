@@ -329,3 +329,68 @@ one rather than deferring that migration.
     cleanup remain valid small follow-ups, but are not blocking and
     can be folded into the CSRF step or split into their own run if
     CSRF alone is enough for one increment.
+- 2026-06-24: Milestone 1 step 4 — CSRF protection on auth forms. Added
+  the synchronizer token pattern to `src/auth.rs` using no new
+  dependencies: `new_csrf_token()` generates 32-byte `OsRng` entropy,
+  hex-encodes it, stores it in the session under key `"csrf_token"`,
+  and returns the token to embed as `<input type="hidden"
+  name="authenticity_token">` in each form. `verify_csrf_token()` reads
+  the stored token, removes it (single-use: remove before compare so an
+  error still invalidates it), then compares. All three POST handlers
+  (signup, login, logout) call `verify_csrf_token` first. GET handlers
+  (`signup_form`, `login_form`, authenticated `index`) generate and embed
+  the token. The `logout` handler now accepts `Form<LogoutForm>` with
+  `authenticity_token`. Also tightened the "corrupt password hash" 500
+  message to "failed to verify password" (minor info-leak fix). `cargo
+  build` clean. Commit `190c6b7`, pushed to main.
+  - Oracle verdict: **flagged / not a clean approval** (confidence high).
+    "Basically sound for current auth forms, but I would not treat this
+    as cleanly unblocking Milestone 2 menu CRUD unchanged, because the
+    single global single-use token will be brittle once multiple admin
+    forms/pages exist. Fix the token model before adding CRUD forms."
+    Concrete concerns, ranked:
+    1. **Multi-tab / multi-form invalidation (primary blocker for M2)**:
+       `signup_form`, `login_form`, and `index` all overwrite the same
+       `"csrf_token"` key. Opening a second form replaces the first
+       token, making the first form fail. Acceptable for today's tiny
+       auth-only surface; not acceptable for Milestone 2 which will have
+       multiple admin forms.
+    2. **"Single-use" guarantee is weaker than it looks**: `remove()`
+       operates on the request-local session copy; `tower-sessions`
+       only persists modified sessions on non-5xx responses. If
+       `verify_csrf_token` succeeds but a later handler in the same
+       request returns 500, the removal may not persist to the store
+       (leaving the token reusable).
+    3. **Concurrent replay**: two simultaneous POSTs with the same valid
+       token can both load the old session record, both compare
+       successfully, and both proceed. Not a CSRF break but not strong
+       replay prevention.
+    4. **Remove-before-compare token-depletion DoS**: a cross-site
+       attacker submitting an invalid token consumes the victim's current
+       token, forcing the victim to reload the form. Preferable to CSRF
+       but unnecessary friction if replay prevention isn't needed.
+    5. **Non-constant-time comparison** (`stored != submitted`):
+       acceptable in practice given 256-bit random token hidden by SOP
+       and consumed on failure, but worth noting.
+    6. **Local HTTP dev with `Secure=true` default**: curl smoke tests
+       work; browsers will not send the session cookie over plain HTTP.
+    Oracle's recommended fix for items 1–2: replace the single
+    `"csrf_token": String` with a bounded token pool —
+    `"csrf_tokens": Vec<String>`, capped at ~16–32 entries. `new_csrf_token`
+    appends to the pool. `verify_csrf_token` scans for the matching
+    token, removes only that entry, and (to address concern #2) calls
+    `session.save().await` explicitly after removal. This resolves the
+    two-tab problem and makes single-use persistence more reliable.
+    Alternative (simpler, acceptable if replay prevention isn't needed):
+    one stable per-session token rotated only on login/logout.
+  - Per the working agreement, this counts as a flagged step: **do not
+    proceed to Milestone 2 (menu CRUD) yet.** Next run must: upgrade
+    the CSRF token storage from a single string to a bounded
+    `Vec<String>` pool under key `"csrf_tokens"` per the oracle's
+    guidance above — `new_csrf_token` appends (capped at 16 entries),
+    `verify_csrf_token` scans-and-removes only the matched token, then
+    calls `session.save()` explicitly. `cargo build` must be clean.
+    Run exactly one codex-oracle prompt asking whether the revised token
+    pool approach resolves the flagged multi-tab and single-use
+    persistence concerns. Only once that comes back approved should a
+    subsequent run proceed to Milestone 2's menu CRUD work.
