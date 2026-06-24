@@ -437,3 +437,40 @@ one rather than deferring that migration.
     slug auto-generated from the name. CSRF token from the pool must
     be used on the creation form. Rate limiting on login/signup and
     explicit session cookie config remain deferred non-blockers.
+
+- 2026-06-24 (manual run — cron oracle stall): Implemented Milestone 2 step 1:
+  `src/restaurants.rs` with restaurant creation form (GET/POST `/restaurants/new`,
+  CSRF-protected, owner-scoped INSERT) and show page (`/restaurants/{id}` with
+  owner_id check). `cargo build` clean. Commit `04b710e`.
+  - Oracle verdict: **flagged — do not proceed to Milestone 2 step 2 yet.**
+    Two bugs in slug generation (tenant isolation is fine):
+    1. `slugify()` uses `char::is_alphanumeric()`, which accepts non-ASCII
+       characters (é, 東京, Arabic, Greek). The DB `CHECK` only allows
+       `[a-z0-9-]`, so Unicode restaurant names produce slugs that fail the
+       constraint at INSERT time → 500 instead of a user-friendly error.
+       Fix: filter to ASCII bytes only (`b'a'..=b'z'`, `b'0'..=b'9'`).
+    2. `unique_slug()` appends `-2`, `-3`, … to the base slug without
+       accounting for the 64-char max. A 62-char base + `-23` = 65 chars
+       → CHECK violation. Fix: truncate `base` to `64 - 3` chars (leaving
+       room for `-99` suffix) before the uniqueness loop.
+  - Next run must: fix both slug issues in `slugify()` and `unique_slug()`,
+    verify `cargo build` clean, then run exactly one codex-oracle prompt
+    asking whether the fixes resolve the two flagged bugs and whether
+    Milestone 2 step 2 (menu_categories CRUD) is now unblocked.
+
+- 2026-06-24 (manual run — cron oracle stall): Implemented Milestone 2 step 1:
+  `src/restaurants.rs` with restaurant creation form (GET/POST `/restaurants/new`,
+  CSRF-protected, owner-scoped INSERT) and show page (`/restaurants/{id}` with
+  owner_id check). `cargo build` clean. Commit `04b710e`.
+  - Oracle verdict: **flagged — do not proceed to Milestone 2 step 2 yet.**
+    Two bugs in slug generation (tenant isolation is fine):
+    1. `slugify()` uses `char::is_alphanumeric()`, which accepts non-ASCII
+       characters (e.g. é, CJK, Arabic). The DB CHECK only allows [a-z0-9-],
+       so Unicode restaurant names produce slugs that fail at INSERT -> 500.
+       Fix: filter to ASCII bytes only (b'a'..=b'z', b'0'..=b'9').
+    2. `unique_slug()` appends -2, -3, ... without accounting for the 64-char
+       max. A 62-char base + "-23" = 65 chars -> CHECK violation.
+       Fix: truncate base to 61 chars before the loop (leaves room for "-99").
+  - Next run must: fix both slug issues, cargo build clean, run one
+    codex-oracle prompt confirming fixes resolve the flags before proceeding
+    to Milestone 2 step 2 (menu_categories CRUD).
