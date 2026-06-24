@@ -1,4 +1,4 @@
-use argon2::password_hash::rand_core::OsRng;
+use argon2::password_hash::rand_core::{OsRng, RngCore};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
 use axum::extract::{Form, State};
@@ -9,6 +9,7 @@ use sqlx::PgPool;
 use tower_sessions::Session;
 
 const USER_ID_KEY: &str = "user_id";
+const CSRF_TOKEN_KEY: &str = "csrf_token";
 const MIN_PASSWORD_LEN: usize = 8;
 
 #[derive(Clone)]
@@ -20,32 +21,87 @@ pub struct AppState {
 pub struct AuthForm {
     email: String,
     password: String,
+    authenticity_token: String,
 }
 
-pub async fn signup_form() -> Html<&'static str> {
-    Html(
+#[derive(Deserialize)]
+pub struct LogoutForm {
+    authenticity_token: String,
+}
+
+/// Generates a 32-byte random token, stores it in the session, and returns the
+/// hex-encoded string to embed in the form.
+async fn new_csrf_token(session: &Session) -> Result<String, (StatusCode, &'static str)> {
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    let token: String = bytes
+        .iter()
+        .flat_map(|b| {
+            let hi = b >> 4;
+            let lo = b & 0xf;
+            [
+                char::from_digit(hi as u32, 16).unwrap(),
+                char::from_digit(lo as u32, 16).unwrap(),
+            ]
+        })
+        .collect();
+    session
+        .insert(CSRF_TOKEN_KEY, token.clone())
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to set CSRF token"))?;
+    Ok(token)
+}
+
+/// Reads the stored CSRF token from the session, compares it to `submitted`,
+/// and removes the token so it is single-use.
+async fn verify_csrf_token(
+    session: &Session,
+    submitted: &str,
+) -> Result<(), (StatusCode, &'static str)> {
+    let stored: Option<String> = session
+        .get(CSRF_TOKEN_KEY)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "session error"))?;
+    let stored = stored.ok_or((StatusCode::FORBIDDEN, "missing CSRF token"))?;
+    // Remove before comparing so an error response still invalidates the token.
+    session
+        .remove::<String>(CSRF_TOKEN_KEY)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "session error"))?;
+    if stored != submitted {
+        return Err((StatusCode::FORBIDDEN, "invalid CSRF token"));
+    }
+    Ok(())
+}
+
+pub async fn signup_form(session: Session) -> Result<Html<String>, (StatusCode, &'static str)> {
+    let token = new_csrf_token(&session).await?;
+    Ok(Html(format!(
         r#"<!doctype html><html><body>
 <h1>Sign up</h1>
 <form method="post" action="/signup">
+<input type="hidden" name="authenticity_token" value="{token}">
 <label>Email <input type="email" name="email" required></label><br>
 <label>Password <input type="password" name="password" required minlength="8"></label><br>
 <button type="submit">Sign up</button>
 </form>
-</body></html>"#,
-    )
+</body></html>"#
+    )))
 }
 
-pub async fn login_form() -> Html<&'static str> {
-    Html(
+pub async fn login_form(session: Session) -> Result<Html<String>, (StatusCode, &'static str)> {
+    let token = new_csrf_token(&session).await?;
+    Ok(Html(format!(
         r#"<!doctype html><html><body>
 <h1>Log in</h1>
 <form method="post" action="/login">
+<input type="hidden" name="authenticity_token" value="{token}">
 <label>Email <input type="email" name="email" required></label><br>
 <label>Password <input type="password" name="password" required></label><br>
 <button type="submit">Log in</button>
 </form>
-</body></html>"#,
-    )
+</body></html>"#
+    )))
 }
 
 pub async fn signup(
@@ -53,6 +109,8 @@ pub async fn signup(
     session: Session,
     Form(form): Form<AuthForm>,
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
+    verify_csrf_token(&session, &form.authenticity_token).await?;
+
     let email = form.email.trim();
     if email.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "email must not be empty"));
@@ -97,6 +155,8 @@ pub async fn login(
     session: Session,
     Form(form): Form<AuthForm>,
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
+    verify_csrf_token(&session, &form.authenticity_token).await?;
+
     let email = form.email.trim();
 
     let row = sqlx::query_as::<_, (i64, String)>(
@@ -112,7 +172,7 @@ pub async fn login(
     };
 
     let parsed_hash = PasswordHash::new(&password_hash)
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "corrupt password hash"))?;
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to verify password"))?;
     if Argon2::default()
         .verify_password(form.password.as_bytes(), &parsed_hash)
         .is_err()
@@ -127,7 +187,11 @@ pub async fn login(
     Ok(Redirect::to("/"))
 }
 
-pub async fn logout(session: Session) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
+pub async fn logout(
+    session: Session,
+    Form(form): Form<LogoutForm>,
+) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
+    verify_csrf_token(&session, &form.authenticity_token).await?;
     session
         .flush()
         .await
@@ -142,9 +206,16 @@ pub async fn index(session: Session) -> Result<impl IntoResponse, (StatusCode, &
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to read session"))?;
 
     match user_id {
-        Some(id) => Ok(Html(format!(
-            "<p>Logged in as user #{id}. <form method=\"post\" action=\"/logout\" style=\"display:inline\"><button type=\"submit\">Log out</button></form></p>"
-        ))),
+        Some(id) => {
+            let token = new_csrf_token(&session).await?;
+            Ok(Html(format!(
+                r#"<p>Logged in as user #{id}.</p>
+<form method="post" action="/logout">
+<input type="hidden" name="authenticity_token" value="{token}">
+<button type="submit">Log out</button>
+</form>"#
+            )))
+        }
         None => Ok(Html(
             "<p>Not logged in. <a href=\"/login\">Log in</a> or <a href=\"/signup\">sign up</a>.</p>"
                 .to_string(),
@@ -152,7 +223,10 @@ pub async fn index(session: Session) -> Result<impl IntoResponse, (StatusCode, &
     }
 }
 
-async fn log_in_session(session: &Session, user_id: i64) -> Result<(), tower_sessions::session::Error> {
+async fn log_in_session(
+    session: &Session,
+    user_id: i64,
+) -> Result<(), tower_sessions::session::Error> {
     // Rotate the session ID on login to prevent session fixation, then store
     // the authenticated user's id.
     session.cycle_id().await?;
