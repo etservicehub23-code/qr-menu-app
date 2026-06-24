@@ -8,7 +8,7 @@ use serde::Deserialize;
 use sqlx::PgPool;
 use tower_sessions::Session;
 
-const USER_ID_KEY: &str = "user_id";
+pub const USER_ID_KEY: &str = "user_id";
 const CSRF_TOKENS_KEY: &str = "csrf_tokens";
 const CSRF_TOKEN_POOL_CAP: usize = 16;
 const MIN_PASSWORD_LEN: usize = 8;
@@ -34,7 +34,7 @@ pub struct LogoutForm {
 /// pool (capped at CSRF_TOKEN_POOL_CAP to bound session size), and returns the
 /// hex-encoded token to embed in the form. Multiple outstanding tokens coexist,
 /// so opening a second form tab does not invalidate the first.
-async fn new_csrf_token(session: &Session) -> Result<String, (StatusCode, &'static str)> {
+pub async fn new_csrf_token(session: &Session) -> Result<String, (StatusCode, &'static str)> {
     let mut bytes = [0u8; 32];
     OsRng.fill_bytes(&mut bytes);
     let token: String = bytes
@@ -74,7 +74,7 @@ async fn new_csrf_token(session: &Session) -> Result<String, (StatusCode, &'stat
 /// to the store before any further handler work. Explicit save ensures the
 /// token is consumed even if a later step in the same request returns 5xx
 /// (tower-sessions normally skips saving on server-error responses).
-async fn verify_csrf_token(
+pub async fn verify_csrf_token(
     session: &Session,
     submitted: &str,
 ) -> Result<(), (StatusCode, &'static str)> {

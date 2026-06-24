@@ -1,4 +1,5 @@
 mod auth;
+mod restaurants;
 
 use auth::AppState;
 use axum::{
@@ -44,6 +45,8 @@ async fn main() {
         .route("/signup", get(auth::signup_form).post(auth::signup))
         .route("/login", get(auth::login_form).post(auth::login))
         .route("/logout", post(auth::logout))
+        .route("/restaurants/new", get(restaurants::new_form).post(restaurants::create))
+        .route("/restaurants/{id}", get(restaurants::show))
         .layer(session_layer)
         .with_state(state);
 
