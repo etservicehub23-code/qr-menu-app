@@ -17,7 +17,7 @@ pub struct CreateRestaurantForm {
 fn slugify(name: &str) -> String {
     name.to_lowercase()
         .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect::<String>()
         .split('-')
         .filter(|s| !s.is_empty())
@@ -30,7 +30,7 @@ async fn unique_slug(
     pool: &sqlx::PgPool,
     base: &str,
 ) -> Result<String, (StatusCode, &'static str)> {
-    let base = base.get(..62).unwrap_or(base); // enforce max length headroom
+    let base = base.get(..61).unwrap_or(base); // 61 + len("-99")=3 <= 64-char DB max
     let exists: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM restaurants WHERE slug = $1)")
             .bind(base)
