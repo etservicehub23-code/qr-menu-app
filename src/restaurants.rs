@@ -137,6 +137,7 @@ pub async fn show(
 <h1>{name}</h1>
 <p>Slug: <code>{slug}</code> · Status: {status}</p>
 <p>Public menu: <a href="/m/{slug}">/m/{slug}</a></p>
+<p><a href="/restaurants/{id}/categories">Manage categories</a></p>
 <p><a href="/">Back</a></p>
 </body></html>"#
     )))
