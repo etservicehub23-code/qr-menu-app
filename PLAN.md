@@ -474,3 +474,33 @@ one rather than deferring that migration.
   - Next run must: fix both slug issues, cargo build clean, run one
     codex-oracle prompt confirming fixes resolve the flags before proceeding
     to Milestone 2 step 2 (menu_categories CRUD).
+
+- 2026-06-25: Milestone 2 step 1 revision — fixed two oracle-flagged slug bugs in
+  `src/restaurants.rs`. (1) `slugify()`: changed `is_alphanumeric()` → `is_ascii_alphanumeric()`
+  so non-ASCII characters (é, CJK, Arabic) can no longer pass through and produce
+  DB-invalid slugs at INSERT; all output is now `[a-z0-9-]` after `to_lowercase()`.
+  (2) `unique_slug()`: truncated base to 61 chars (was 62), ensuring the longest possible
+  suffix `-99` (3 chars) keeps the candidate within the 64-char DB CHECK limit (61+3=64).
+  `cargo build` clean. Commit `1772cc4`, pushed to main.
+  - Oracle verdict: **approved / resolves both flagged blockers** (confidence high).
+    "Approved for the two oracle-flagged blockers: Milestone 2 step 2 is unblocked.
+    `slugify()` now prevents DB-invalid non-ASCII characters... `unique_slug()` now
+    keeps generated suffixes -2 through -99 within the migration's 64-character regex
+    limit." Non-blocking notes:
+    1. `to_lowercase()` runs before `is_ascii_alphanumeric()`, so exotic Unicode
+       lowercase mappings (e.g. `İİİ` → `i-i-i`) can still produce ASCII slugs from
+       non-ASCII input — does not violate the DB constraint, but not strict ASCII-only
+       policy. Oracle suggested the stronger alternative: `c.to_ascii_lowercase()` in
+       the `.map()` closure (optional, not blocking).
+    2. `unique_slug()` conservatively truncates all bases to 61, even unsuffixed slugs
+       that could validly be 62-64 chars — minor, non-blocking.
+    3. Concurrent create race: two simultaneous creates can both see a slug as free;
+       one insert succeeds, the other hits unique constraint → `500` instead of `409`.
+       Non-blocking for M2 step 2.
+    4. `unique_slug()` relies on its ASCII precondition being guaranteed by the caller —
+       currently true, but not enforced internally.
+  - Next run: proceed to **Milestone 2 step 2** — `menu_categories` CRUD. Implement
+    `src/categories.rs` with routes for create/edit/delete categories scoped to the
+    authenticated owner's restaurant. CSRF token from pool must be used. Keep to the
+    smallest first slice: create + list categories for a given restaurant (defer
+    sort_order reordering to a later step).
