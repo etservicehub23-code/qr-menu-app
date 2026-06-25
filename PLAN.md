@@ -504,3 +504,43 @@ one rather than deferring that migration.
     authenticated owner's restaurant. CSRF token from pool must be used. Keep to the
     smallest first slice: create + list categories for a given restaurant (defer
     sort_order reordering to a later step).
+
+- 2026-06-25 (evening): Milestone 2 step 2 — added `menu_categories` migration
+  (`migrations/20260625000000_create_menu_categories.sql`: BIGINT IDENTITY PK,
+  restaurant_id FK, non-empty name CHECK, sort_order INTEGER DEFAULT 0, index),
+  `src/categories.rs` with `require_restaurant_owner()` ownership guard, `list()`,
+  `new_form()`, `create()` (CSRF-protected, auto-incrementing sort_order via
+  MAX+1 subquery), routes wired in `main.rs`, categories link added to
+  restaurant show page. `cargo build` clean. Commit `f3e9d99`, pushed to main.
+  - Oracle verdict: **flagged — not fully approved** (confidence high).
+    "Not fully approved as-is. Tenant isolation is adequate... The real
+    blocker is stored XSS: `restaurant_name` and category `name` are
+    interpolated directly into HTML in categories.rs without escaping."
+    Concrete concerns, ranked:
+    1. **Stored XSS (primary blocker)**: `restaurant_name` and `name` in
+       `list()`, `new_form()` (restaurant_name), and the list rows (`name`)
+       are interpolated into raw HTML with `format!()`. A restaurant name or
+       category name containing `<script>alert(1)</script>` would execute in
+       any owner's browser. Fix: HTML-escape all user-controlled values before
+       interpolation (e.g. a minimal `fn html_escape(s: &str) -> String`
+       replacing `&`, `<`, `>`, `"`, `'` — or pull in a dependency like
+       `html-escape` 0.2 which is small and well-maintained).
+       The same issue exists in `restaurants.rs` show/new_form handlers where
+       `{name}` and `{slug}` are also interpolated unescaped — fix those too.
+    2. `ON DELETE CASCADE` not set on `restaurant_id` FK — oracle suggests
+       adding it now via a follow-up migration so restaurant deletion doesn't
+       silently orphan or hard-error on categories later.
+    3. `sort_order` MAX+1 is race-prone (concurrent creates can collide) but
+       `ORDER BY sort_order, id` tie-breaks deterministically — not a security
+       issue, acceptable for M2, just note it for future reorder logic.
+  - Per the working agreement, **do not proceed to M2 step 3 (menu_items)
+    yet.** Next run must:
+    (a) Add a minimal `html_escape()` helper and apply it to every user-
+        controlled value interpolated into HTML in `categories.rs` AND in
+        `restaurants.rs` (name, slug in show/new_form — slug is already
+        ASCII-safe but escape for consistency).
+    (b) Optionally add a follow-up migration adding `ON DELETE CASCADE` to
+        `menu_categories.restaurant_id` (small, safe to fold in).
+    (c) `cargo build` clean.
+    (d) Run exactly one codex-oracle prompt confirming the XSS fix resolves
+        the blocker and whether M2 step 3 is now unblocked.
