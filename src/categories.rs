@@ -53,7 +53,7 @@ pub async fn list(
             "<ul>\n{}\n</ul>",
             categories
                 .iter()
-                .map(|(_, name)| format!("  <li>{}</li>", html_escape(name)))
+                .map(|(id, name)| format!("  <li><a href=\"/categories/{}/items\">{}</a></li>", id, html_escape(name)))
                 .collect::<Vec<_>>()
                 .join("\n")
         )
