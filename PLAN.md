@@ -579,3 +579,40 @@ one rather than deferring that migration.
     without URL validation; add `ON DELETE CASCADE` from `menu_items.category_id` to
     `menu_categories(id)` in the items migration.
 
+- 2026-06-26 (evening): Milestone 2 step 3 — `menu_items` create+list CRUD. Added migration
+  `20260626120000_create_menu_items.sql` (BIGINT IDENTITY PK, `category_id` FK with `ON DELETE
+  CASCADE`, non-empty name CHECK, nullable description, `price_cents INTEGER >= 0`, currency TEXT
+  default EUR, `is_available`, `sort_order`, `created_at`; index on `category_id`). Added
+  `src/items.rs` with `require_category_owner()` (JOIN through `restaurants` to verify
+  `owner_id`), `list()` (html_escape on name, description, category_name), `new_form()`
+  (CSRF-protected, html_escape on category_name), `create()` (validates name/description/price
+  and inserts with MAX+1 sort_order). Wired routes `/categories/{id}/items` and
+  `/categories/{id}/items/new` in `main.rs`. Categories list now links each entry to its items
+  page. `photo_url` deliberately deferred. `cargo build` clean. Commit `a5a15ee`, pushed to main.
+  - Oracle verdict: **approved / proceed to M2 step 4** (confidence high for static correctness).
+    "M2 step 3 is acceptable to proceed: create + list are tenant-isolated through the category
+    -> restaurant -> owner chain, and the item HTML output paths escape the user-controlled
+    fields I found... I would not block M2 step 4." Non-blocking notes ranked:
+    1. **Step 4 footgun to avoid**: edit/delete/toggle must verify the `item_id` belongs to an
+       owned category — a route `/categories/{owned_category}/items/{victim_item}` must not pass
+       just because the category is owned. Oracle recommended `require_item_owner()` using a
+       3-way JOIN (`menu_items → menu_categories → restaurants WHERE owner_id = $2`) and
+       preferring single-statement guarded writes for mutations (e.g.
+       `UPDATE menu_items SET ... FROM menu_categories mc JOIN restaurants r ... WHERE mi.id = $1
+       AND r.owner_id = $2`).
+    2. Schema doesn't enforce name <= 120 / description <= 500 at DB level (app does, non-blocking).
+    3. UI `max="999999"` on price field but server accepts any non-negative i32 (inconsistency,
+       non-blocking).
+    4. `MAX(sort_order) + 1` race-prone (acknowledged, deterministic tie-break, acceptable for M2).
+    5. Length validation uses byte length not char count (minor; HTML maxlength is char-based).
+  - Next run: proceed to **Milestone 2 step 4** — item edit/delete/availability toggle. Implement:
+    (a) `require_item_owner(pool, item_id, user_id) -> item_fields` using a 3-way JOIN per
+        oracle's guidance above.
+    (b) Edit form + POST handler (name, description, price_cents) — CSRF-protected, html_escape
+        on all display values.
+    (c) Delete route (POST, CSRF-protected) — returns 204/redirect; item goes away via DB DELETE.
+    (d) Availability toggle (POST, CSRF-protected) — flips `is_available` boolean.
+    Keep to the smallest single increment: implement all three (edit/delete/toggle) in one step
+    if they're straightforward, or split edit into one step and delete+toggle into another if
+    needed for scope discipline.
+
