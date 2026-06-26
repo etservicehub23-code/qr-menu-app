@@ -1,4 +1,5 @@
 mod auth;
+mod escape;
 mod categories;
 mod restaurants;
 

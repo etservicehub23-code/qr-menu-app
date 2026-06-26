@@ -1,4 +1,5 @@
 use crate::auth::{new_csrf_token, verify_csrf_token, AppState, USER_ID_KEY};
+use crate::escape::html_escape;
 use axum::extract::{Form, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Redirect};
@@ -132,11 +133,13 @@ pub async fn show(
     };
 
     let status = if is_published { "published" } else { "draft" };
+    let name_escaped = html_escape(&name);
+    let slug_escaped = html_escape(&slug);
     Ok(Html(format!(
         r#"<!doctype html><html><body>
-<h1>{name}</h1>
-<p>Slug: <code>{slug}</code> · Status: {status}</p>
-<p>Public menu: <a href="/m/{slug}">/m/{slug}</a></p>
+<h1>{name_escaped}</h1>
+<p>Slug: <code>{slug_escaped}</code> · Status: {status}</p>
+<p>Public menu: <a href="/m/{slug_escaped}">/m/{slug_escaped}</a></p>
 <p><a href="/restaurants/{id}/categories">Manage categories</a></p>
 <p><a href="/">Back</a></p>
 </body></html>"#

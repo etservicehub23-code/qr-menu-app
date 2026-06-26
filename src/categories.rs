@@ -1,4 +1,5 @@
 use crate::auth::{new_csrf_token, verify_csrf_token, AppState};
+use crate::escape::html_escape;
 use crate::restaurants::require_auth;
 use axum::extract::{Form, Path, State};
 use axum::http::StatusCode;
@@ -52,15 +53,16 @@ pub async fn list(
             "<ul>\n{}\n</ul>",
             categories
                 .iter()
-                .map(|(_, name)| format!("  <li>{name}</li>"))
+                .map(|(_, name)| format!("  <li>{}</li>", html_escape(name)))
                 .collect::<Vec<_>>()
                 .join("\n")
         )
     };
 
+    let restaurant_name_escaped = html_escape(&restaurant_name);
     Ok(Html(format!(
         r#"<!doctype html><html><body>
-<h1>{restaurant_name} — Categories</h1>
+<h1>{restaurant_name_escaped} — Categories</h1>
 {list_html}
 <p><a href="/restaurants/{restaurant_id}/categories/new">+ New category</a></p>
 <p><a href="/restaurants/{restaurant_id}">Back to restaurant</a></p>
@@ -77,9 +79,10 @@ pub async fn new_form(
     let restaurant_name =
         require_restaurant_owner(&state.pool, restaurant_id, user_id).await?;
     let token = new_csrf_token(&session).await?;
+    let restaurant_name_escaped = html_escape(&restaurant_name);
     Ok(Html(format!(
         r#"<!doctype html><html><body>
-<h1>{restaurant_name} — New Category</h1>
+<h1>{restaurant_name_escaped} — New Category</h1>
 <form method="post" action="/restaurants/{restaurant_id}/categories/new">
 <input type="hidden" name="authenticity_token" value="{token}">
 <label>Category name <input type="text" name="name" required maxlength="120"></label><br>
