@@ -544,3 +544,38 @@ one rather than deferring that migration.
     (c) `cargo build` clean.
     (d) Run exactly one codex-oracle prompt confirming the XSS fix resolves
         the blocker and whether M2 step 3 is now unblocked.
+
+- 2026-06-26: Milestone 2 step 2 revision — fixed oracle-flagged stored XSS in `categories.rs`
+  and `restaurants.rs`. Added `src/escape.rs` with a minimal `html_escape()` function (escapes
+  `&`, `<`, `>`, `"`, `'` to HTML entities). Applied in `categories.rs`: restaurant_name escaped
+  in `list()` and `new_form()` headings, each category name escaped in the `<li>` list items.
+  Applied in `restaurants.rs` `show()`: name escaped in the `<h1>`, slug escaped in the `<code>`,
+  `/m/{slug}` href, and link text. Also added migration
+  `20260626000000_menu_categories_cascade.sql` adding `ON DELETE CASCADE` to
+  `menu_categories.restaurant_id` FK (drops and re-adds constraint). `cargo build` clean.
+  Commit `13d7297`, pushed to main.
+  - Oracle verdict: **approved / resolves the XSS blocker** (confidence high). "commit 13d7297
+    appears to resolve the oracle-flagged stored XSS blocker for categories.rs and restaurants.rs.
+    I found no remaining unescaped user-controlled HTML interpolation in those two files...
+    html_escape() is adequate for the current element-text and double-quoted attribute contexts.
+    The cascade migration is valid PostgreSQL syntax and should run safely." Non-blocking notes:
+    1. Future `format!()` HTML assembly remains fragile — `menu_items` will add more text sinks
+       (name, description, photo_url, price); every one must be escaped or consider Askama
+       templates which auto-escape.
+    2. `html_escape()` is only correct for HTML text and quoted attributes — not for JS, CSS,
+       raw URLs, or unquoted attributes.
+    3. `/m/{slug}` href is safe only because slug is DB-constrained to `[a-z0-9-]`.
+    4. Cascade migration assumes default FK name `menu_categories_restaurant_id_fkey` (correct
+       for the existing migration); would fail if a deployed DB had a renamed constraint.
+    Oracle's validation plan for the next runner: test with restaurant name
+    `<script>alert(1)</script>"'&` and category name `<img src=x onerror=alert(1)>`, verify
+    responses contain only escaped entities.
+  - Next run: proceed to **Milestone 2 step 3** — `menu_items` CRUD. Implement `src/items.rs`
+    with routes for create/list menu items scoped to a category (and through it, to the
+    authenticated owner's restaurant). CSRF-protected. Keep to the smallest first slice:
+    create + list items for a given category (defer edit/delete/photo/availability toggle to
+    later steps). Oracle guidance: apply `html_escape()` to item name and description in every
+    HTML handler from the first commit; do NOT put `photo_url` directly into a `src` attribute
+    without URL validation; add `ON DELETE CASCADE` from `menu_items.category_id` to
+    `menu_categories(id)` in the items migration.
+
