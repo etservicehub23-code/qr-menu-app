@@ -616,3 +616,40 @@ one rather than deferring that migration.
     if they're straightforward, or split edit into one step and delete+toggle into another if
     needed for scope discipline.
 
+
+- 2026-06-27: Milestone 2 step 4 — item edit/delete/availability toggle. Added to `src/items.rs`:
+  `require_item_owner()` (3-way JOIN: menu_items → menu_categories → restaurants WHERE
+  owner_id = $2, used only by edit_form GET to pre-fill the form); `edit_form` GET with
+  three separate CSRF tokens (one per form: edit/toggle/delete), pre-filled form values
+  html-escaped; `edit` POST (guarded `UPDATE ... FROM mc JOIN restaurants r ... RETURNING
+  menu_items.category_id`); `delete` POST (guarded `DELETE ... USING mc JOIN r ...
+  RETURNING menu_items.category_id`); `toggle` POST (guarded `UPDATE SET is_available =
+  NOT menu_items.is_available ... RETURNING menu_items.category_id`). Items list updated
+  to show availability status and link each item to its edit page. Routes wired in
+  `main.rs`: GET/POST `/items/{id}/edit`, POST `/items/{id}/delete`, POST
+  `/items/{id}/toggle`. `cargo build` clean. Commit `736567a`, pushed to main.
+  - Oracle verdict: **approved / M3 unblocked** (confidence high). "M2 step 4 is mostly
+    sound: an owner cannot edit/delete/toggle another owner's item by guessing IDs through
+    the current guarded writes. The UPDATE...FROM...RETURNING and DELETE...USING...RETURNING
+    queries are valid PostgreSQL and semantically safe given the PK/FK chain
+    menu_items.category_id → menu_categories.id → restaurants.id. The edit form escaping
+    is sufficient for both value="{name_e}" and <textarea>{desc_e}</textarea> because
+    html_escape() escapes &, <, >, ", '. M3 is not blocked by tenant isolation, SQL
+    correctness, or XSS in this code." Non-blocking notes:
+    1. No server-side price upper bound (app checks ≥0 but no max; DB also has no CHECK
+       constraint) — inconsistent with HTML max="999999".
+    2. No regression tests for cross-tenant item writes (edit/delete/toggle routes).
+    3. M3 needs an explicit `is_published` decision: `/m/<slug>` should probably filter
+       `WHERE restaurants.is_published = true`; oracle suggests adding a publish toggle
+       to the owner restaurant page before or during M3, so draft menus aren't
+       inadvertently public.
+    4. For M3, oracle recommended querying: `WHERE restaurants.slug = $1 AND
+       restaurants.is_published = true`, then JOIN categories and items.
+  - Next run: proceed to **Milestone 3** — public menu page at `/m/<slug>`. Per oracle
+    guidance: implement `GET /m/{slug}` returning a mobile-first read-only HTML page;
+    query `WHERE restaurants.slug = $1 AND restaurants.is_published = true`; JOIN
+    menu_categories and menu_items (filter `is_available = true`); html_escape all
+    displayed values. Also add a publish/unpublish toggle on the owner restaurant show
+    page (POST, CSRF-protected) so owners can control visibility. Keep to the smallest
+    first slice: the public read path + publish toggle (defer Askama templates, CSS
+    polish, and QR code to later milestones).
