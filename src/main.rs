@@ -2,6 +2,7 @@ mod auth;
 mod escape;
 mod categories;
 mod items;
+mod menu;
 mod restaurants;
 
 use auth::AppState;
@@ -50,6 +51,7 @@ async fn main() {
         .route("/logout", post(auth::logout))
         .route("/restaurants/new", get(restaurants::new_form).post(restaurants::create))
         .route("/restaurants/{id}", get(restaurants::show))
+        .route("/restaurants/{id}/publish", post(restaurants::publish_toggle))
         .route("/restaurants/{id}/categories", get(categories::list))
         .route("/restaurants/{id}/categories/new", get(categories::new_form).post(categories::create))
         .route("/categories/{id}/items", get(items::list))
@@ -57,6 +59,7 @@ async fn main() {
         .route("/items/{id}/edit", get(items::edit_form).post(items::edit))
         .route("/items/{id}/delete", post(items::delete))
         .route("/items/{id}/toggle", post(items::toggle))
+        .route("/m/{slug}", get(menu::public_menu))
         .layer(session_layer)
         .with_state(state);
 

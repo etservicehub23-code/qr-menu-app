@@ -12,6 +12,11 @@ pub struct CreateRestaurantForm {
     authenticity_token: String,
 }
 
+#[derive(Deserialize)]
+pub struct TokenForm {
+    authenticity_token: String,
+}
+
 /// Converts a restaurant name to a URL-safe slug:
 /// lowercase, spaces → hyphens, strip non-alphanumeric/hyphen, collapse
 /// repeated hyphens, trim leading/trailing hyphens.
@@ -132,18 +137,50 @@ pub async fn show(
         return Err((StatusCode::NOT_FOUND, "restaurant not found"));
     };
 
+    let token = new_csrf_token(&session).await?;
     let status = if is_published { "published" } else { "draft" };
+    let toggle_label = if is_published { "Unpublish" } else { "Publish" };
     let name_escaped = html_escape(&name);
     let slug_escaped = html_escape(&slug);
     Ok(Html(format!(
         r#"<!doctype html><html><body>
 <h1>{name_escaped}</h1>
-<p>Slug: <code>{slug_escaped}</code> · Status: {status}</p>
+<p>Slug: <code>{slug_escaped}</code> · Status: <strong>{status}</strong></p>
 <p>Public menu: <a href="/m/{slug_escaped}">/m/{slug_escaped}</a></p>
+<form method="post" action="/restaurants/{id}/publish" style="display:inline">
+<input type="hidden" name="authenticity_token" value="{token}">
+<button type="submit">{toggle_label}</button>
+</form>
 <p><a href="/restaurants/{id}/categories">Manage categories</a></p>
 <p><a href="/">Back</a></p>
 </body></html>"#
     )))
+}
+
+pub async fn publish_toggle(
+    State(state): State<AppState>,
+    session: Session,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    Form(form): Form<TokenForm>,
+) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
+    let user_id = require_auth(&session).await?;
+    verify_csrf_token(&session, &form.authenticity_token).await?;
+
+    let rows = sqlx::query(
+        "UPDATE restaurants SET is_published = NOT is_published
+         WHERE id = $1 AND owner_id = $2",
+    )
+    .bind(id)
+    .bind(user_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to toggle publish status"))?;
+
+    if rows.rows_affected() == 0 {
+        return Err((StatusCode::NOT_FOUND, "restaurant not found"));
+    }
+
+    Ok(Redirect::to(&format!("/restaurants/{id}")))
 }
 
 /// Extracts the authenticated user_id from the session, or returns 401.
