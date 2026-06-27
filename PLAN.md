@@ -653,3 +653,42 @@ one rather than deferring that migration.
     page (POST, CSRF-protected) so owners can control visibility. Keep to the smallest
     first slice: the public read path + publish toggle (defer Askama templates, CSS
     polish, and QR code to later milestones).
+
+- 2026-06-27 (evening): Milestone 3 — public menu page + publish/unpublish toggle.
+  Added `src/menu.rs` with `public_menu` handler for `GET /m/{slug}`: queries
+  `WHERE slug=$1 AND is_published=true` (404 for drafts/unknown); single INNER JOIN
+  query fetches categories+available items ordered by sort_order; groups rows into
+  sections in Rust (consecutive rows per category_id); all displayed values through
+  `html_escape()`; mobile-first HTML with inline CSS (viewport meta, flexbox item rows).
+  Updated `src/restaurants.rs`: added `TokenForm`, `publish_toggle` handler (POST
+  `/restaurants/{id}/publish`, CSRF-protected, guarded `UPDATE ... WHERE id=$1 AND
+  owner_id=$2`); updated `show()` to generate a CSRF token and render a
+  Publish/Unpublish toggle button. Wired `GET /m/{slug}` and `POST
+  /restaurants/{id}/publish` in `main.rs`. `cargo build` clean. Commit `1f323de`,
+  pushed to main.
+  - Oracle verdict: **approved / M4 unblocked** (confidence high). "Proceed to M4
+    after adding a small validation test set; I do not see security rework blocking
+    QR generation. GET /m/{slug} correctly withholds unpublished restaurants via WHERE
+    slug=$1 AND is_published=true, uses parameter binding, and escapes the public HTML
+    fields. The publish toggle has correct tenant isolation because the write is scoped
+    by both id and owner_id, and CSRF verification happens before the UPDATE."
+    Non-blocking notes:
+    1. Non-idempotent publish toggle (`NOT is_published` can double-flip on stale
+       re-submission) — safe from tenant takeover, but weaker UX than explicit
+       `SET is_published = $3` with a known target state.
+    2. No regression tests for public draft suppression, owner isolation, CSRF-before-
+       write — oracle listed specific test cases (draft returns 404, unpublished slug
+       returns 404, published returns 200 with escaped content, CSRF miss returns 403,
+       cross-tenant toggle returns 404).
+    3. Public menu link shown on restaurant show page even for drafts — not a security
+       bug (/m/{slug} returns 404 for drafts), but may confuse owners.
+    4. Href escaping via html_escape on slug is correct only because slug is DB-
+       constrained to [a-z0-9-]; if slugs ever allow /, %, Unicode, or query chars,
+       URL path encoding is needed in addition to HTML attribute escaping.
+  - Next run: proceed to **Milestone 4** — QR code generation. Implement `GET
+    /restaurants/{id}/qr` (owner-authenticated) that generates a QR code encoding
+    `https://<domain>/m/<slug>` using the `qrcode` crate, returning a downloadable
+    SVG (or PNG). The domain should come from a `BASE_URL` env var (similar to
+    `DATABASE_URL`). Keep to the smallest first slice: SVG output returned inline
+    (no file storage needed), CSRF not required (GET, no state change). Add
+    `qrcode` to Cargo.toml.
