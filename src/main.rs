@@ -54,6 +54,9 @@ async fn main() {
         .route("/restaurants/{id}/categories/new", get(categories::new_form).post(categories::create))
         .route("/categories/{id}/items", get(items::list))
         .route("/categories/{id}/items/new", get(items::new_form).post(items::create))
+        .route("/items/{id}/edit", get(items::edit_form).post(items::edit))
+        .route("/items/{id}/delete", post(items::delete))
+        .route("/items/{id}/toggle", post(items::toggle))
         .layer(session_layer)
         .with_state(state);
 
