@@ -12,3 +12,4 @@ tower-sessions-sqlx-store = { version = "0.15.0", features = ["postgres"] }
 serde = { version = "1.0.228", features = ["derive"] }
 tower-sessions = { version = "0.14", default-features = false, features = ["axum-core"] }
 qrcode = "0.14"
+askama = "0.12"

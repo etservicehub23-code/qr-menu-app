@@ -44,6 +44,9 @@ async fn main() {
 
     let base_url = std::env::var("BASE_URL")
         .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
+        panic!("BASE_URL must be an absolute http:// or https:// URL, got: {base_url:?}");
+    }
 
     let state = AppState { pool, base_url };
 
