@@ -4,6 +4,7 @@ mod categories;
 mod items;
 mod menu;
 mod restaurants;
+mod qr;
 
 use auth::AppState;
 use axum::{
@@ -41,7 +42,10 @@ async fn main() {
         .expect("failed to run session store migrations");
     let session_layer = SessionManagerLayer::new(session_store);
 
-    let state = AppState { pool };
+    let base_url = std::env::var("BASE_URL")
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+
+    let state = AppState { pool, base_url };
 
     let app = Router::new()
         .route("/health", get(health))
@@ -60,6 +64,7 @@ async fn main() {
         .route("/items/{id}/delete", post(items::delete))
         .route("/items/{id}/toggle", post(items::toggle))
         .route("/m/{slug}", get(menu::public_menu))
+        .route("/restaurants/{id}/qr", get(qr::qr_svg))
         .layer(session_layer)
         .with_state(state);
 

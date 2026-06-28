@@ -152,6 +152,7 @@ pub async fn show(
 <button type="submit">{toggle_label}</button>
 </form>
 <p><a href="/restaurants/{id}/categories">Manage categories</a></p>
+<p><a href="/restaurants/{id}/qr">Download QR code (SVG)</a></p>
 <p><a href="/">Back</a></p>
 </body></html>"#
     )))

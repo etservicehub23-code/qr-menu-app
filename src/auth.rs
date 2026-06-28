@@ -16,6 +16,7 @@ const MIN_PASSWORD_LEN: usize = 8;
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
+    pub base_url: String,
 }
 
 #[derive(Deserialize)]
