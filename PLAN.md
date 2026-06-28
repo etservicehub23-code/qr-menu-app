@@ -722,3 +722,35 @@ one rather than deferring that migration.
     (e.g. the public menu page in `menu.rs`) as a proof-of-concept. Also fold in
     BASE_URL startup validation (validate as absolute http/https, panic on bad value)
     as a small companion change in the same run.
+
+- 2026-06-28 (evening): Milestone 5 slice 1 — Askama template for public menu + BASE_URL validation.
+  Added `askama = "0.12"` to Cargo.toml. Created `templates/menu.html` with compile-time
+  auto-escaping ({{ }} expressions escape HTML by default for .html templates). Converted
+  `src/menu.rs` from `format!()` HTML assembly to typed `MenuPage` template struct
+  (`restaurant_name`, `Vec<MenuSection{category_name, Vec<MenuItem{name,description,price}>}>`);
+  removed all manual `html_escape()` calls from this handler. Also added BASE_URL prefix
+  validation in `main.rs` (panics if not http:// or https://). `cargo build` clean.
+  Commit `9625307`, pushed to main.
+  - Oracle verdict: **Askama approved; BASE_URL flagged as weak** (confidence high).
+    "Askama 0.12.1 does auto-escape {{ }} in .html templates via the default Html escaper,
+    so the removed html_escape() calls are correctly replaced... The weak part is BASE_URL:
+    starts_with() is prefix validation, not URL validation. M5 template continuation is not
+    blocked by the Askama slice, but the BASE_URL fix should be tightened before calling
+    this security concern closed."
+    Ranked risks:
+    1. **BASE_URL prefix check (primary concern)**: accepts malformed/hostile values —
+       embedded credentials (`https://trusted@evil.example`), empty host, paths, fragments,
+       whitespace/control chars. Oracle recommends parsing with `url = "2"` crate: validate
+       scheme is http/https, host exists, no username/password, no query/fragment.
+    2. No automated render test proving hostile DB strings are escaped after conversion.
+    3. Price is safe (derived from integer, harmless through escaping).
+  - Per the working agreement, the BASE_URL concern is flagged. Next run must:
+    (a) Add `url = "2"` crate to Cargo.toml.
+    (b) In `main.rs`, parse BASE_URL with `url::Url`, validate scheme is http/https,
+        host is non-empty, no username/password, no query/fragment. Panic with a clear
+        message on failure. Store the validated origin string (scheme + host + optional port)
+        in AppState.
+    (c) `cargo build` clean.
+    (d) Run one codex-oracle prompt confirming the URL validation resolves the flagged
+        concern and whether the next slice (converting remaining format!() handlers) is
+        now unblocked.
