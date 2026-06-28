@@ -692,3 +692,33 @@ one rather than deferring that migration.
     `DATABASE_URL`). Keep to the smallest first slice: SVG output returned inline
     (no file storage needed), CSRF not required (GET, no state change). Add
     `qrcode` to Cargo.toml.
+
+- 2026-06-28: Milestone 4 — QR code generation. Added `qrcode = "0.14"` to Cargo.toml.
+  Extended `AppState` with `base_url: String` read from `BASE_URL` env var (falls
+  back to `http://localhost:3000`). New `src/qr.rs`: `GET /restaurants/{id}/qr`
+  handler verifies session auth (401 if absent) and fetches slug `WHERE id=$1 AND
+  owner_id=$2` (404 if not owned); encodes `{base_url}/m/{slug}` as a QR code via
+  `qrcode::render::svg`; returns `image/svg+xml` with `Content-Disposition: attachment;
+  filename="menu-qr.svg"`. Wired route in `main.rs`. Restaurant show page links to
+  the QR download. `cargo build` clean. Commit `cb4c380`, pushed to main.
+  - Oracle verdict: **approved / M5 unblocked** (confidence high). "The endpoint
+    design is sound: unauthenticated users get 401, and authenticated non-owners
+    get 404... The slug is DB-constrained to [a-z0-9-], so it is safe in the
+    encoded URL. Content-Disposition uses a static filename, so no header injection
+    issue. qrcode 0.14.1 SVG output does not embed the QR payload as XML text or
+    attributes; it renders fixed XML plus numeric path commands, so URL-based
+    SVG/XSS injection is not a realistic risk here. M5 is not blocked."
+    Non-blocking notes:
+    1. Missing tests for the security contract (unauthenticated → 401, cross-owner
+       → 404, owner → SVG headers); oracle recommends adding before treating M4 locked.
+    2. BASE_URL is trusted but unvalidated — bad env value generates bad QR targets;
+       oracle recommends validating as absolute http/https URL at startup.
+    3. Future: do not pass user-controlled colors into qrcode SVG renderer.
+    4. Optional hardening: add X-Content-Type-Options: nosniff.
+  - Next run: proceed to **Milestone 5** — Askama templates + UI polish. Replace
+    all `format!()`-based HTML with compile-time Askama templates (auto-escaped by
+    default, eliminating ongoing manual html_escape() burden). Keep to the smallest
+    first slice: add Askama dependency + template directory + convert one handler
+    (e.g. the public menu page in `menu.rs`) as a proof-of-concept. Also fold in
+    BASE_URL startup validation (validate as absolute http/https, panic on bad value)
+    as a small companion change in the same run.
