@@ -754,3 +754,29 @@ one rather than deferring that migration.
     (d) Run one codex-oracle prompt confirming the URL validation resolves the flagged
         concern and whether the next slice (converting remaining format!() handlers) is
         now unblocked.
+
+- 2026-06-29: Resolved oracle-flagged BASE_URL concern from M5 slice 1. Added `url = "2"` to Cargo.toml.
+  Replaced weak `starts_with("http://")` check in `main.rs` with `validate_base_url()` function using
+  `url::Url::parse()`: validates scheme (http/https only), non-empty host, no credentials, no query,
+  no fragment; builds and stores canonical origin (scheme+host+optional-port). `cargo build` clean.
+  Commit `f220976`, pushed to main.
+  - Oracle verdict: **approved / M5 continues unblocked** (confidence high). "The replacement closes
+    the main weak-check concern for QR URL generation: credentials, non-http schemes, empty hosts,
+    queries, and fragments no longer survive into state.base_url. https://user@evil.com is parsed by
+    url::Url::parse() but the explicit username/password check rejects it. file:// and data: can parse
+    but the explicit scheme check rejects them; empty-host forms rejected by parser or host check. The
+    stored value is an origin only, so path/query/fragment are not included in the QR URL. M5 template
+    conversion is not blocked."
+    Non-blocking notes:
+    1. url::Url::parse() is forgiving: trims leading/trailing C0 controls/spaces silently; not
+       categorically rejecting whitespace/control-char inputs (could add raw-string check before parse).
+    2. BASE_URL with a path (e.g. https://example.com/sneaky/path) is accepted and silently
+       canonicalized — path is stripped from origin; non-blocking since QR URL is unaffected, but
+       could add `if parsed.path() != "/"` guard for strictness.
+    3. No unit tests yet for validate_base_url(); oracle recommends adding before treating closed.
+  - Next run: proceed to **Milestone 5 slice 2** — convert remaining format!() HTML handlers to
+    Askama templates. Priority order per oracle: auth.rs (signup_form, login_form, index), then
+    restaurants.rs (new_form, show), then categories.rs, items.rs. Each conversion removes manual
+    html_escape() burden and relies on Askama's compile-time auto-escaping. Keep to smallest increment:
+    convert auth.rs handlers (3 templates) in this slice, leaving the others for the next slice.
+
