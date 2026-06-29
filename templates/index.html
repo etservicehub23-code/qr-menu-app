@@ -1,0 +1,5 @@
+{% if let Some(id) = user_id %}<p>Logged in as user #{{ id }}.</p>
+<form method="post" action="/logout">
+<input type="hidden" name="authenticity_token" value="{{ logout_token }}">
+<button type="submit">Log out</button>
+</form>{% else %}<p>Not logged in. <a href="/login">Log in</a> or <a href="/signup">sign up</a>.</p>{% endif %}

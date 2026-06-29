@@ -1,6 +1,7 @@
 use argon2::password_hash::rand_core::{OsRng, RngCore};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
+use askama::Template;
 use axum::extract::{Form, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Redirect};
@@ -17,6 +18,26 @@ const MIN_PASSWORD_LEN: usize = 8;
 pub struct AppState {
     pub pool: PgPool,
     pub base_url: String,
+}
+
+#[derive(Template)]
+#[template(path = "signup.html")]
+struct SignupPage {
+    token: String,
+}
+
+#[derive(Template)]
+#[template(path = "login.html")]
+struct LoginPage {
+    token: String,
+}
+
+#[derive(Template)]
+#[template(path = "index.html")]
+struct IndexPage {
+    user_id: Option<i64>,
+    // Non-empty only when user_id is Some; safe to render as empty in the guest branch.
+    logout_token: String,
 }
 
 #[derive(Deserialize)]
@@ -107,32 +128,18 @@ pub async fn verify_csrf_token(
 
 pub async fn signup_form(session: Session) -> Result<Html<String>, (StatusCode, &'static str)> {
     let token = new_csrf_token(&session).await?;
-    Ok(Html(format!(
-        r#"<!doctype html><html><body>
-<h1>Sign up</h1>
-<form method="post" action="/signup">
-<input type="hidden" name="authenticity_token" value="{token}">
-<label>Email <input type="email" name="email" required></label><br>
-<label>Password <input type="password" name="password" required minlength="8"></label><br>
-<button type="submit">Sign up</button>
-</form>
-</body></html>"#
-    )))
+    let html = SignupPage { token }
+        .render()
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "template error"))?;
+    Ok(Html(html))
 }
 
 pub async fn login_form(session: Session) -> Result<Html<String>, (StatusCode, &'static str)> {
     let token = new_csrf_token(&session).await?;
-    Ok(Html(format!(
-        r#"<!doctype html><html><body>
-<h1>Log in</h1>
-<form method="post" action="/login">
-<input type="hidden" name="authenticity_token" value="{token}">
-<label>Email <input type="email" name="email" required></label><br>
-<label>Password <input type="password" name="password" required></label><br>
-<button type="submit">Log in</button>
-</form>
-</body></html>"#
-    )))
+    let html = LoginPage { token }
+        .render()
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "template error"))?;
+    Ok(Html(html))
 }
 
 pub async fn signup(
@@ -230,30 +237,23 @@ pub async fn logout(
     Ok(Redirect::to("/login"))
 }
 
-pub async fn index(session: Session) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
+pub async fn index(session: Session) -> Result<Html<String>, (StatusCode, &'static str)> {
     let user_id: Option<i64> = session
         .get(USER_ID_KEY)
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to read session"))?;
 
-    match user_id {
-        Some(id) => {
-            let token = new_csrf_token(&session).await?;
-            Ok(Html(format!(
-                r#"<p>Logged in as user #{id}.</p>
-<form method="post" action="/logout">
-<input type="hidden" name="authenticity_token" value="{token}">
-<button type="submit">Log out</button>
-</form>"#
-            )))
-        }
-        None => Ok(Html(
-            "<p>Not logged in. <a href=\"/login\">Log in</a> or <a href=\"/signup\">sign up</a>.</p>"
-                .to_string(),
-        )),
-    }
-}
+    let logout_token = if user_id.is_some() {
+        new_csrf_token(&session).await?
+    } else {
+        String::new()
+    };
 
+    let html = IndexPage { user_id, logout_token }
+        .render()
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "template error"))?;
+    Ok(Html(html))
+}
 async fn log_in_session(
     session: &Session,
     user_id: i64,

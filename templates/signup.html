@@ -1,0 +1,12 @@
+<!doctype html>
+<html>
+<body>
+<h1>Sign up</h1>
+<form method="post" action="/signup">
+<input type="hidden" name="authenticity_token" value="{{ token }}">
+<label>Email <input type="email" name="email" required></label><br>
+<label>Password <input type="password" name="password" required minlength="8"></label><br>
+<button type="submit">Sign up</button>
+</form>
+</body>
+</html>
