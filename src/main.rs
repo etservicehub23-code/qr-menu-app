@@ -19,6 +19,34 @@ async fn health() -> &'static str {
     "ok"
 }
 
+fn validate_base_url(raw: &str) -> String {
+    let parsed = url::Url::parse(raw)
+        .unwrap_or_else(|e| panic!("BASE_URL is not a valid URL ({raw:?}): {e}"));
+    match parsed.scheme() {
+        "http" | "https" => {}
+        s => panic!("BASE_URL scheme must be http or https, got {s:?} in {raw:?}"),
+    }
+    if parsed.host().is_none() {
+        panic!("BASE_URL must have a non-empty host, got: {raw:?}");
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        panic!("BASE_URL must not contain credentials, got: {raw:?}");
+    }
+    if parsed.query().is_some() {
+        panic!("BASE_URL must not contain a query string, got: {raw:?}");
+    }
+    if parsed.fragment().is_some() {
+        panic!("BASE_URL must not contain a fragment, got: {raw:?}");
+    }
+    // Build canonical origin: scheme + host + optional non-default port
+    let mut origin = format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap());
+    if let Some(port) = parsed.port() {
+        origin.push(':');
+        origin.push_str(&port.to_string());
+    }
+    origin
+}
+
 #[tokio::main]
 async fn main() {
     let database_url = std::env::var("DATABASE_URL")
@@ -42,11 +70,9 @@ async fn main() {
         .expect("failed to run session store migrations");
     let session_layer = SessionManagerLayer::new(session_store);
 
-    let base_url = std::env::var("BASE_URL")
+    let base_url_raw = std::env::var("BASE_URL")
         .unwrap_or_else(|_| "http://localhost:3000".to_string());
-    if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
-        panic!("BASE_URL must be an absolute http:// or https:// URL, got: {base_url:?}");
-    }
+    let base_url = validate_base_url(&base_url_raw);
 
     let state = AppState { pool, base_url };
 
