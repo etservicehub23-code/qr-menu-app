@@ -1,0 +1,12 @@
+<!doctype html>
+<html>
+<body>
+<h1>{{ restaurant_name }} — New Category</h1>
+<form method="post" action="/restaurants/{{ restaurant_id }}/categories/new">
+<input type="hidden" name="authenticity_token" value="{{ token }}">
+<label>Category name <input type="text" name="name" required maxlength="120"></label><br>
+<button type="submit">Add Category</button>
+</form>
+<p><a href="/restaurants/{{ restaurant_id }}/categories">Back to categories</a></p>
+</body>
+</html>

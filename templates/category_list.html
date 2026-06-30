@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+<body>
+<h1>{{ restaurant_name }} — Categories</h1>
+{% if categories.is_empty() %}
+<p>No categories yet.</p>
+{% else %}
+<ul>
+{% for cat in categories %}
+  <li><a href="/categories/{{ cat.id }}/items">{{ cat.name }}</a></li>
+{% endfor %}
+</ul>
+{% endif %}
+<p><a href="/restaurants/{{ restaurant_id }}/categories/new">+ New category</a></p>
+<p><a href="/restaurants/{{ restaurant_id }}">Back to restaurant</a></p>
+</body>
+</html>

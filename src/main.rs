@@ -1,5 +1,4 @@
 mod auth;
-mod escape;
 mod categories;
 mod items;
 mod menu;

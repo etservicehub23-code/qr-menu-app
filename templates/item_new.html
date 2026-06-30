@@ -1,0 +1,14 @@
+<!doctype html>
+<html>
+<body>
+<h1>{{ category_name }} — New Item</h1>
+<form method="post" action="/categories/{{ category_id }}/items/new">
+<input type="hidden" name="authenticity_token" value="{{ token }}">
+<label>Item name <input type="text" name="name" required maxlength="120"></label><br>
+<label>Description <textarea name="description" maxlength="500"></textarea></label><br>
+<label>Price (cents, e.g. 1250 = €12.50) <input type="number" name="price_cents" required min="0" max="999999"></label><br>
+<button type="submit">Add Item</button>
+</form>
+<p><a href="/categories/{{ category_id }}/items">Back to items</a></p>
+</body>
+</html>

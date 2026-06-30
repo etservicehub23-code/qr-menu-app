@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+<body>
+<h1>{{ category_name }} — Items</h1>
+{% if items.is_empty() %}
+<p>No items yet.</p>
+{% else %}
+<ul>
+{% for item in items %}
+  <li><a href="/items/{{ item.id }}/edit"><strong>{{ item.name }}</strong></a> — €{{ item.price }} [{% if item.is_available %}✓{% else %}✗ unavailable{% endif %}]{% match item.description %}{% when Some with (desc) %}<br><small>{{ desc }}</small>{% when None %}{% endmatch %}</li>
+{% endfor %}
+</ul>
+{% endif %}
+<p><a href="/categories/{{ category_id }}/items/new">+ New item</a></p>
+<p><a href="/restaurants/{{ restaurant_id }}/categories">Back to categories</a></p>
+</body>
+</html>

@@ -1,11 +1,50 @@
 use crate::auth::{new_csrf_token, verify_csrf_token, AppState};
-use crate::escape::html_escape;
 use crate::restaurants::require_auth;
+use askama::Template;
 use axum::extract::{Form, Path, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Redirect};
 use serde::Deserialize;
 use tower_sessions::Session;
+
+struct ItemRow {
+    id: i64,
+    name: String,
+    description: Option<String>,
+    price: String,
+    is_available: bool,
+}
+
+#[derive(Template)]
+#[template(path = "item_list.html")]
+struct ItemListPage {
+    category_id: i64,
+    restaurant_id: i64,
+    category_name: String,
+    items: Vec<ItemRow>,
+}
+
+#[derive(Template)]
+#[template(path = "item_new.html")]
+struct ItemNewPage {
+    category_id: i64,
+    category_name: String,
+    token: String,
+}
+
+#[derive(Template)]
+#[template(path = "item_edit.html")]
+struct ItemEditPage {
+    item_id: i64,
+    category_id: i64,
+    name: String,
+    description: String,
+    price_cents: i32,
+    is_available: bool,
+    edit_token: String,
+    toggle_token: String,
+    delete_token: String,
+}
 
 #[derive(Deserialize)]
 pub struct CreateItemForm {
@@ -91,41 +130,20 @@ pub async fn list(
     .await
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
 
-    let list_html = if items.is_empty() {
-        "<p>No items yet.</p>".to_string()
-    } else {
-        format!(
-            "<ul>\n{}\n</ul>",
-            items
-                .iter()
-                .map(|(id, name, desc, price_cents, is_available)| {
-                    let name_e = html_escape(name);
-                    let desc_e = desc
-                        .as_deref()
-                        .map(html_escape)
-                        .unwrap_or_default();
-                    let price = format!("{:.2}", *price_cents as f64 / 100.0);
-                    let avail = if *is_available { "✓" } else { "✗ unavailable" };
-                    if desc_e.is_empty() {
-                        format!("  <li><a href=\"/items/{id}/edit\"><strong>{name_e}</strong></a> — €{price} [{avail}]</li>")
-                    } else {
-                        format!("  <li><a href=\"/items/{id}/edit\"><strong>{name_e}</strong></a> — €{price} [{avail}]<br><small>{desc_e}</small></li>")
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        )
-    };
-
-    let category_name_escaped = html_escape(&category_name);
-    Ok(Html(format!(
-        r#"<!doctype html><html><body>
-<h1>{category_name_escaped} — Items</h1>
-{list_html}
-<p><a href="/categories/{category_id}/items/new">+ New item</a></p>
-<p><a href="/restaurants/{restaurant_id}/categories">Back to categories</a></p>
-</body></html>"#
-    )))
+    let items_view: Vec<ItemRow> = items
+        .into_iter()
+        .map(|(id, name, description, price_cents, is_available)| ItemRow {
+            id,
+            name,
+            description,
+            price: format!("{:.2}", price_cents as f64 / 100.0),
+            is_available,
+        })
+        .collect();
+    let html = ItemListPage { category_id, restaurant_id, category_name, items: items_view }
+        .render()
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "template error"))?;
+    Ok(Html(html))
 }
 
 pub async fn new_form(
@@ -137,20 +155,10 @@ pub async fn new_form(
     let (_, category_name) =
         require_category_owner(&state.pool, category_id, user_id).await?;
     let token = new_csrf_token(&session).await?;
-    let category_name_escaped = html_escape(&category_name);
-    Ok(Html(format!(
-        r#"<!doctype html><html><body>
-<h1>{category_name_escaped} — New Item</h1>
-<form method="post" action="/categories/{category_id}/items/new">
-<input type="hidden" name="authenticity_token" value="{token}">
-<label>Item name <input type="text" name="name" required maxlength="120"></label><br>
-<label>Description <textarea name="description" maxlength="500"></textarea></label><br>
-<label>Price (cents, e.g. 1250 = €12.50) <input type="number" name="price_cents" required min="0" max="999999"></label><br>
-<button type="submit">Add Item</button>
-</form>
-<p><a href="/categories/{category_id}/items">Back to items</a></p>
-</body></html>"#
-    )))
+    let html = ItemNewPage { category_id, category_name, token }
+        .render()
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "template error"))?;
+    Ok(Html(html))
 }
 
 pub async fn create(
@@ -218,33 +226,21 @@ pub async fn edit_form(
     let toggle_token = new_csrf_token(&session).await?;
     let delete_token = new_csrf_token(&session).await?;
 
-    let name_e = html_escape(&name);
-    let desc_e = description.as_deref().map(html_escape).unwrap_or_default();
-    let toggle_label = if is_available { "Mark Unavailable" } else { "Mark Available" };
-
-    Ok(Html(format!(
-        r#"<!doctype html><html><body>
-<h1>Edit Item</h1>
-<form method="post" action="/items/{item_id}/edit">
-<input type="hidden" name="authenticity_token" value="{edit_token}">
-<label>Item name <input type="text" name="name" required maxlength="120" value="{name_e}"></label><br>
-<label>Description <textarea name="description" maxlength="500">{desc_e}</textarea></label><br>
-<label>Price (cents, e.g. 1250 = €12.50) <input type="number" name="price_cents" required min="0" max="999999" value="{price_cents}"></label><br>
-<button type="submit">Save Changes</button>
-</form>
-<div>
-<form method="post" action="/items/{item_id}/toggle" style="display:inline">
-<input type="hidden" name="authenticity_token" value="{toggle_token}">
-<button type="submit">{toggle_label}</button>
-</form>
-<form method="post" action="/items/{item_id}/delete" style="display:inline">
-<input type="hidden" name="authenticity_token" value="{delete_token}">
-<button type="submit">Delete Item</button>
-</form>
-</div>
-<p><a href="/categories/{category_id}/items">Back to items</a></p>
-</body></html>"#
-    )))
+    let description_str = description.unwrap_or_default();
+    let html = ItemEditPage {
+        item_id,
+        category_id,
+        name,
+        description: description_str,
+        price_cents,
+        is_available,
+        edit_token,
+        toggle_token,
+        delete_token,
+    }
+    .render()
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "template error"))?;
+    Ok(Html(html))
 }
 
 pub async fn edit(

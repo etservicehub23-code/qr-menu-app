@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+<body>
+<h1>Edit Item</h1>
+<form method="post" action="/items/{{ item_id }}/edit">
+<input type="hidden" name="authenticity_token" value="{{ edit_token }}">
+<label>Item name <input type="text" name="name" required maxlength="120" value="{{ name }}"></label><br>
+<label>Description <textarea name="description" maxlength="500">{{ description }}</textarea></label><br>
+<label>Price (cents, e.g. 1250 = €12.50) <input type="number" name="price_cents" required min="0" max="999999" value="{{ price_cents }}"></label><br>
+<button type="submit">Save Changes</button>
+</form>
+<div>
+<form method="post" action="/items/{{ item_id }}/toggle" style="display:inline">
+<input type="hidden" name="authenticity_token" value="{{ toggle_token }}">
+<button type="submit">{% if is_available %}Mark Unavailable{% else %}Mark Available{% endif %}</button>
+</form>
+<form method="post" action="/items/{{ item_id }}/delete" style="display:inline">
+<input type="hidden" name="authenticity_token" value="{{ delete_token }}">
+<button type="submit">Delete Item</button>
+</form>
+</div>
+<p><a href="/categories/{{ category_id }}/items">Back to items</a></p>
+</body>
+</html>
