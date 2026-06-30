@@ -807,3 +807,34 @@ one rather than deferring that migration.
     and use `{% for %}` + `{% if %}` loops; do NOT use `|safe` on any pre-assembled HTML. Files
     to convert: categories.rs (list, new_form) and items.rs (list, new_form, edit_form). Keep
     to one slice; commit and oracle-review before proceeding.
+
+- 2026-06-30 (evening): Milestone 5 slice 3 — convert categories.rs + items.rs to Askama
+  templates. Completed the full M5 Askama migration.
+  - categories.rs: added CategoryRow, CategoryListPage ({% for cat in categories %} loop),
+    CategoryNewPage. Replaced list and new_form format!() with template .render() calls.
+  - items.rs: added ItemRow (with price: String, description: Option<String>),
+    ItemListPage ({% for item in items %} + {% match item.description %}{% when Some %}...
+    {% when None %}{% endmatch %}), ItemNewPage, ItemEditPage ({% if is_available %} for
+    toggle label; description: description.unwrap_or_default() for textarea pre-fill).
+    Replaced list, new_form, edit_form format!() + manual html_escape() with .render().
+  - Deleted src/escape.rs entirely (html_escape() no longer called anywhere). Removed
+    `mod escape;` from main.rs. cargo build: zero warnings, zero errors.
+  - Commit `d8d7c80`, pushed to main.
+  - Oracle verdict: **approved / M5 complete** (high confidence on security review).
+    "M5 is code-complete. I found no |safe in the five templates and no remaining live
+    html_escape, escape::, or mod escape references. User-controlled strings in all five
+    templates are rendered through .html Askama templates, so Askama's HTML escaper applies.
+    The Some with (desc) pattern is valid Askama 0.12 syntax. description.unwrap_or_default()
+    is correct for the edit textarea." Non-blocking notes:
+    1. No regression tests for escaped malicious strings in category/item list + edit pages;
+       oracle recommends adding before treating M5 fully locked.
+    2. Dynamic URL components use numeric ids today (safe); future string URL components
+       must not rely on HTML escaping alone.
+    3. Oracle couldn't run cargo locally — our cargo build (zero warnings) resolves that.
+  - Next run: proceed to **Milestone 6 — Image uploads (first increment)**. Per PLAN.md
+    data model, menu_items already has photo_url in the design (deferred in M2). First
+    increment: (a) add a migration adding `photo_url TEXT` to menu_items, (b) wire the
+    `object_store` or `aws-sdk-s3` crate as the S3 client with config (BUCKET, S3_ENDPOINT,
+    AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY env vars), (c) add an upload endpoint stub
+    (multipart POST, auth-gated) but NOT full upload logic yet — just the plumbing and
+    connectivity check. Keep to the smallest safe first step.
