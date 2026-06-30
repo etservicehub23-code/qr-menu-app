@@ -780,3 +780,30 @@ one rather than deferring that migration.
     html_escape() burden and relies on Askama's compile-time auto-escaping. Keep to smallest increment:
     convert auth.rs handlers (3 templates) in this slice, leaving the others for the next slice.
 
+- 2026-06-30: Milestone 5 slice 2 — convert restaurants.rs handlers to Askama templates.
+  Created `templates/restaurant_new.html` (RestaurantNewPage: token) and
+  `templates/restaurant_show.html` (RestaurantShowPage: id, name, slug, is_published, token).
+  Replaced `format!()` HTML + manual `html_escape()` calls in `new_form` and `show` with
+  template `.render()`. Removed `use crate::escape::html_escape` from `restaurants.rs`.
+  Askama's Html escaper handles {{ name }}, {{ slug }}, {{ token }} in text nodes, `<code>`,
+  and quoted `href`/`value` attributes. `{{ id }}` (i64) is injection-safe by type. `cargo
+  build` clean. Commit `0daeff0`, pushed to main.
+  - Oracle verdict: **approved / M5 slice 3 unblocked** (confidence high). "The conversion is
+    correct for HTML/XSS escaping. Askama 0.12 maps .html templates to Html escaping, and
+    that escaper replaces &, <, >, ", and ', so {{ name }}, {{ slug }}, and {{ token }} are
+    escaped correctly in text nodes, <code>, quoted href, and hidden input value attributes.
+    {{ id }} is safe from attribute injection because it is an i64, rendered only as digits or
+    -. I see no XSS regression in restaurant_new.html or restaurant_show.html. M5 slice 3 is
+    unblocked, with the caveat that categories/items should use real Askama loops/conditionals,
+    not pre-rendered HTML strings passed through |safe." Non-blocking notes:
+    1. href="/m/{{ slug }}" safe only because slugify() + DB CHECK constrains to [a-z0-9-];
+       Askama won't percent-encode URL path delimiters if that invariant is ever bypassed.
+    2. Slice 3 trap: categories.rs and items.rs build `list_html` strings; do NOT pass those
+       via `|safe`; use Askama `{% for %}` loops with plain `{{ field }}` instead.
+    3. No render tests yet; oracle recommends adding a test rendering RestaurantShowPage with
+       hostile values to assert escaping is correct.
+  - Next run: proceed to **Milestone 5 slice 3** — convert categories.rs and items.rs handlers
+    to Askama templates. Per oracle: pass Vec<CategoryView>/Vec<ItemView> structs to templates
+    and use `{% for %}` + `{% if %}` loops; do NOT use `|safe` on any pre-assembled HTML. Files
+    to convert: categories.rs (list, new_form) and items.rs (list, new_form, edit_form). Keep
+    to one slice; commit and oracle-review before proceeding.
