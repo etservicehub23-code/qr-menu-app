@@ -1,10 +1,26 @@
 use crate::auth::{new_csrf_token, verify_csrf_token, AppState, USER_ID_KEY};
-use crate::escape::html_escape;
+use askama::Template;
 use axum::extract::{Form, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Redirect};
 use serde::Deserialize;
 use tower_sessions::Session;
+
+#[derive(Template)]
+#[template(path = "restaurant_new.html")]
+struct RestaurantNewPage {
+    token: String,
+}
+
+#[derive(Template)]
+#[template(path = "restaurant_show.html")]
+struct RestaurantShowPage {
+    id: i64,
+    name: String,
+    slug: String,
+    is_published: bool,
+    token: String,
+}
 
 #[derive(Deserialize)]
 pub struct CreateRestaurantForm {
@@ -69,17 +85,10 @@ pub async fn new_form(
 ) -> Result<Html<String>, (StatusCode, &'static str)> {
     let _user_id = require_auth(&session).await?;
     let token = new_csrf_token(&session).await?;
-    Ok(Html(format!(
-        r#"<!doctype html><html><body>
-<h1>Create your restaurant</h1>
-<form method="post" action="/restaurants/new">
-<input type="hidden" name="authenticity_token" value="{token}">
-<label>Restaurant name <input type="text" name="name" required maxlength="120"></label><br>
-<button type="submit">Create</button>
-</form>
-<p><a href="/">Back</a></p>
-</body></html>"#
-    )))
+    let html = RestaurantNewPage { token }
+        .render()
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "template error"))?;
+    Ok(Html(html))
 }
 
 pub async fn create(
@@ -138,24 +147,10 @@ pub async fn show(
     };
 
     let token = new_csrf_token(&session).await?;
-    let status = if is_published { "published" } else { "draft" };
-    let toggle_label = if is_published { "Unpublish" } else { "Publish" };
-    let name_escaped = html_escape(&name);
-    let slug_escaped = html_escape(&slug);
-    Ok(Html(format!(
-        r#"<!doctype html><html><body>
-<h1>{name_escaped}</h1>
-<p>Slug: <code>{slug_escaped}</code> · Status: <strong>{status}</strong></p>
-<p>Public menu: <a href="/m/{slug_escaped}">/m/{slug_escaped}</a></p>
-<form method="post" action="/restaurants/{id}/publish" style="display:inline">
-<input type="hidden" name="authenticity_token" value="{token}">
-<button type="submit">{toggle_label}</button>
-</form>
-<p><a href="/restaurants/{id}/categories">Manage categories</a></p>
-<p><a href="/restaurants/{id}/qr">Download QR code (SVG)</a></p>
-<p><a href="/">Back</a></p>
-</body></html>"#
-    )))
+    let html = RestaurantShowPage { id, name, slug, is_published, token }
+        .render()
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "template error"))?;
+    Ok(Html(html))
 }
 
 pub async fn publish_toggle(

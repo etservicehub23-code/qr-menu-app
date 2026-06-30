@@ -1,0 +1,12 @@
+<!doctype html>
+<html>
+<body>
+<h1>Create your restaurant</h1>
+<form method="post" action="/restaurants/new">
+<input type="hidden" name="authenticity_token" value="{{ token }}">
+<label>Restaurant name <input type="text" name="name" required maxlength="120"></label><br>
+<button type="submit">Create</button>
+</form>
+<p><a href="/">Back</a></p>
+</body>
+</html>

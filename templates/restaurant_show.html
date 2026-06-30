@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+<body>
+<h1>{{ name }}</h1>
+<p>Slug: <code>{{ slug }}</code> · Status: <strong>{% if is_published %}published{% else %}draft{% endif %}</strong></p>
+<p>Public menu: <a href="/m/{{ slug }}">/m/{{ slug }}</a></p>
+<form method="post" action="/restaurants/{{ id }}/publish" style="display:inline">
+<input type="hidden" name="authenticity_token" value="{{ token }}">
+<button type="submit">{% if is_published %}Unpublish{% else %}Publish{% endif %}</button>
+</form>
+<p><a href="/restaurants/{{ id }}/categories">Manage categories</a></p>
+<p><a href="/restaurants/{{ id }}/qr">Download QR code (SVG)</a></p>
+<p><a href="/">Back</a></p>
+</body>
+</html>
