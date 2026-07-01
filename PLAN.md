@@ -838,3 +838,58 @@ one rather than deferring that migration.
     AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY env vars), (c) add an upload endpoint stub
     (multipart POST, auth-gated) but NOT full upload logic yet — just the plumbing and
     connectivity check. Keep to the smallest safe first step.
+
+- 2026-07-01: Milestone 6 step 1 — S3 client plumbing + photo upload stub. Added
+  `object_store = { version = "0.11", features = ["aws"] }` and axum `multipart`
+  feature to Cargo.toml. Migration `20260701000000_add_photo_url_to_menu_items.sql`
+  adds nullable `photo_url TEXT` column to `menu_items`. Extended `AppState` with
+  `s3: Arc<dyn object_store::ObjectStore>` + `s3_bucket: String`; `main.rs` builds
+  `AmazonS3Builder` at startup from `S3_ENDPOINT`, `BUCKET`, `AWS_ACCESS_KEY_ID`,
+  `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` env vars (S3_ENDPOINT/BUCKET/keys required,
+  region defaults to "auto"). Created `src/uploads.rs` with `POST /items/{id}/photo`
+  stub (auth-gated, CSRF-protected, ownership-checked, redirects back to edit page).
+  Made `require_item_owner` pub; added `photo_token` + `photo_url` to `ItemEditPage`;
+  updated `item_edit.html` with photo section (current photo display + upload form).
+  `cargo build` clean (one expected dead-code warning for s3/s3_bucket). Commit
+  `a656a26`, pushed to main.
+  - Oracle verdict: **flagged — do not proceed to M6 step 2 yet** (confidence high).
+    "M6 step 2 is not blocked by the S3 builder, but it should not proceed on top of
+    the current multipart control flow unchanged." Concrete concerns, ranked:
+    1. **CSRF verification happens too late (primary blocker)**: the handler reads all
+       multipart fields (including the file) before verifying CSRF. Today Axum's
+       default multipart cap is 2 MB, bounding the DoS exposure; but when the upload
+       body limit is raised for real photos, attackers can force the server to read
+       large bodies before CSRF rejection. Fix: require `authenticity_token` as the
+       FIRST multipart field; if the first field is not the CSRF token, reject
+       immediately without scanning further. Verify CSRF, then ownership, then read
+       the file field.
+    2. **Ownership check also after body consumption**: same concern — unauthorized
+       users can force full body parsing before being rejected. Ordering fix resolves
+       both: auth → CSRF (first field) → ownership → file field.
+    3. `with_allow_http(true)` is unconditional — acceptable for dev MinIO but unsafe
+       as a production default. Should be conditional on `S3_ENDPOINT` being a
+       localhost/private endpoint (or a separate env flag).
+    4. `photo_url` should not become arbitrary user input; oracle recommends storing
+       an app-generated `photo_object_key TEXT` (e.g. `menu-items/{id}/{uuid}.jpg`)
+       and deriving the display URL from trusted config. (Design concern for step 2,
+       not blocking this revision.)
+    5. SVG uploads must be excluded from accepted image types (JPEG/PNG/WebP only)
+       when real upload logic lands in step 2.
+    Oracle confirmed: `next_field()` correctly drains prior unread field data, so
+    dropping non-CSRF fields without calling `.bytes()` does not corrupt the stream.
+    Askama's HTML escaping in `<img src="{{ url }}">` prevents attribute-breakout XSS
+    for now. `AmazonS3Builder` path-style config is correct for MinIO/Backblaze;
+    virtual-hosted style defaults to false in object_store 0.11.2.
+  - Per the working agreement, **do not proceed to M6 step 2 (actual upload) yet.**
+    Next run must:
+    (a) Rework `src/uploads.rs`: read only the FIRST multipart field, require its name
+        to be `"authenticity_token"`, call `.text().await`, then `verify_csrf_token`
+        — reject immediately if the first field is absent or has a different name.
+        After CSRF passes, call `require_item_owner`. Then call `next_field()` for the
+        file field (stub can just drop it).
+    (b) Make `with_allow_http(true)` conditional: only set it when `S3_ENDPOINT`
+        starts with `"http://"` (plaintext endpoint); TLS endpoints use the default
+        false, avoiding credentials-over-plaintext in production.
+    (c) `cargo build` clean.
+    (d) Run exactly one codex-oracle prompt confirming the control-flow fix resolves
+        the flagged CSRF-ordering concern and whether M6 step 2 is now unblocked.
