@@ -87,6 +87,9 @@ async fn main() {
     let aws_region = std::env::var("AWS_REGION")
         .unwrap_or_else(|_| "auto".to_string());
 
+    // Allow plain HTTP only for endpoints that explicitly use http://.
+    // This prevents credentials from being sent over plaintext if config drifts to HTTPS.
+    let allow_http = s3_endpoint.starts_with("http://");
     let s3: Arc<dyn object_store::ObjectStore> = Arc::new(
         AmazonS3Builder::new()
             .with_endpoint(&s3_endpoint)
@@ -94,7 +97,7 @@ async fn main() {
             .with_access_key_id(&aws_access_key_id)
             .with_secret_access_key(&aws_secret_access_key)
             .with_region(&aws_region)
-            .with_allow_http(true)
+            .with_allow_http(allow_http)
             .build()
             .expect("failed to build S3 client"),
     );
