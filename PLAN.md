@@ -893,3 +893,44 @@ one rather than deferring that migration.
     (c) `cargo build` clean.
     (d) Run exactly one codex-oracle prompt confirming the control-flow fix resolves
         the flagged CSRF-ordering concern and whether M6 step 2 is now unblocked.
+
+- 2026-07-01 (evening): M6 step 1 revision — fixed two oracle-flagged issues.
+  (a) `src/uploads.rs`: reworked to require `authenticity_token` as the FIRST
+      multipart field; any request where the first field is absent or has a
+      different name is rejected immediately (400) without reading the rest of
+      the body. CSRF is verified before ownership check and before any file bytes
+      are consumed. (b) `src/main.rs`: `with_allow_http` is now conditional on
+      `s3_endpoint.starts_with("http://")` — HTTPS endpoints use the default
+      `false`, preventing plaintext credential leakage if endpoint config drifts.
+      `cargo build` clean. Commit `de10129`, pushed to main.
+  - Oracle verdict: **flagged again (one remaining issue), M6 step 2 conditionally
+    unblocked** (confidence high). "The first-field CSRF requirement resolves the
+    specific 'scan multipart until token' flaw. Rejecting when the first field is
+    absent or not named authenticity_token is the right direction. However, it is
+    not a complete DoS fix because `first_field.text().await` can still read an
+    attacker-sized 'CSRF token' field before CSRF verification, especially once
+    upload body limits are raised." Concrete concerns, ranked:
+    1. **Unbounded first-field read (remaining blocker)**: `first_field.text().await`
+       reads the entire first field into memory before CSRF verification. An attacker
+       can submit a multipart body where `authenticity_token` is the first field but
+       contains megabytes of data. Fix: replace `.text().await` with a bounded
+       chunked reader capped at a small limit (e.g. 512 bytes), returning 413 if
+       exceeded, before calling `verify_csrf_token`.
+    2. `allow_http = starts_with("http://")` still allows plaintext when config uses
+       HTTP — acceptable for dev MinIO, weak as a production safety net. Oracle
+       recommends an explicit `ALLOW_INSECURE_S3_HTTP=true` flag as a stronger guard.
+       Non-blocking for this revision; noted for hardening.
+    3. Second field name (`photo`) not yet validated — step 2 must enforce field name,
+       MIME allowlist, hard byte limit while streaming, and no unexpected extra fields.
+    4. No route-specific body limit yet — Axum's default caps current exposure but
+       step 2 must set an explicit limit before real uploads.
+  - Per the working agreement, **do not proceed to M6 step 2 yet.** Next run must:
+    (a) In `src/uploads.rs`, add a `read_bounded_text_field` helper that streams the
+        multipart field in chunks, accumulates up to a max byte count (suggest 512),
+        and returns `Err(413 Payload Too Large)` if the field exceeds that limit.
+        Replace `first_field.text().await` with this helper.
+    (b) `cargo build` clean.
+    (c) Run exactly one codex-oracle prompt confirming the bounded read resolves the
+        remaining DoS concern and whether M6 step 2 is now unblocked.
+    Note: `allow_http` URL-parsing improvement and explicit insecure-HTTP flag are
+    deferred (non-blocking); the bounded CSRF read is the only blocker.
