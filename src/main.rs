@@ -4,13 +4,16 @@ mod items;
 mod menu;
 mod restaurants;
 mod qr;
+mod uploads;
 
 use auth::AppState;
 use axum::{
     routing::{get, post},
     Router,
 };
+use object_store::aws::AmazonS3Builder;
 use sqlx::postgres::PgPoolOptions;
+use std::sync::Arc;
 use tower_sessions::SessionManagerLayer;
 use tower_sessions_sqlx_store::PostgresStore;
 
@@ -73,7 +76,30 @@ async fn main() {
         .unwrap_or_else(|_| "http://localhost:3000".to_string());
     let base_url = validate_base_url(&base_url_raw);
 
-    let state = AppState { pool, base_url };
+    let s3_endpoint = std::env::var("S3_ENDPOINT")
+        .expect("S3_ENDPOINT must be set (e.g. http://localhost:9000)");
+    let s3_bucket = std::env::var("BUCKET")
+        .expect("BUCKET must be set");
+    let aws_access_key_id = std::env::var("AWS_ACCESS_KEY_ID")
+        .expect("AWS_ACCESS_KEY_ID must be set");
+    let aws_secret_access_key = std::env::var("AWS_SECRET_ACCESS_KEY")
+        .expect("AWS_SECRET_ACCESS_KEY must be set");
+    let aws_region = std::env::var("AWS_REGION")
+        .unwrap_or_else(|_| "auto".to_string());
+
+    let s3: Arc<dyn object_store::ObjectStore> = Arc::new(
+        AmazonS3Builder::new()
+            .with_endpoint(&s3_endpoint)
+            .with_bucket_name(&s3_bucket)
+            .with_access_key_id(&aws_access_key_id)
+            .with_secret_access_key(&aws_secret_access_key)
+            .with_region(&aws_region)
+            .with_allow_http(true)
+            .build()
+            .expect("failed to build S3 client"),
+    );
+
+    let state = AppState { pool, base_url, s3, s3_bucket };
 
     let app = Router::new()
         .route("/health", get(health))
@@ -91,6 +117,7 @@ async fn main() {
         .route("/items/{id}/edit", get(items::edit_form).post(items::edit))
         .route("/items/{id}/delete", post(items::delete))
         .route("/items/{id}/toggle", post(items::toggle))
+        .route("/items/{id}/photo", post(uploads::upload_photo))
         .route("/m/{slug}", get(menu::public_menu))
         .route("/restaurants/{id}/qr", get(qr::qr_svg))
         .layer(session_layer)

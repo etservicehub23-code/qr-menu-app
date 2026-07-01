@@ -19,6 +19,18 @@
 <button type="submit">Delete Item</button>
 </form>
 </div>
+<h2>Photo</h2>
+{% match photo_url %}
+{% when Some(url) %}
+<p>Current photo: <img src="{{ url }}" alt="Item photo" style="max-width:200px"></p>
+{% when None %}
+<p>No photo set.</p>
+{% endmatch %}
+<form method="post" action="/items/{{ item_id }}/photo" enctype="multipart/form-data">
+<input type="hidden" name="authenticity_token" value="{{ photo_token }}">
+<label>Upload photo <input type="file" name="photo" accept="image/*" required></label><br>
+<button type="submit">Upload Photo</button>
+</form>
 <p><a href="/categories/{{ category_id }}/items">Back to items</a></p>
 </body>
 </html>

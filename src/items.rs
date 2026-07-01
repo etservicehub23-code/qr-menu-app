@@ -44,6 +44,8 @@ struct ItemEditPage {
     edit_token: String,
     toggle_token: String,
     delete_token: String,
+    photo_token: String,
+    photo_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -91,7 +93,7 @@ async fn require_category_owner(
 
 /// Verifies the session user owns the restaurant containing this item.
 /// Returns (category_id, name, description, price_cents, is_available).
-async fn require_item_owner(
+pub async fn require_item_owner(
     pool: &sqlx::PgPool,
     item_id: i64,
     user_id: i64,
@@ -225,6 +227,16 @@ pub async fn edit_form(
     let edit_token = new_csrf_token(&session).await?;
     let toggle_token = new_csrf_token(&session).await?;
     let delete_token = new_csrf_token(&session).await?;
+    let photo_token = new_csrf_token(&session).await?;
+
+    let photo_url: Option<String> = sqlx::query_scalar(
+        "SELECT photo_url FROM menu_items WHERE id = $1",
+    )
+    .bind(item_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "database error"))?
+    .flatten();
 
     let description_str = description.unwrap_or_default();
     let html = ItemEditPage {
@@ -237,6 +249,8 @@ pub async fn edit_form(
         edit_token,
         toggle_token,
         delete_token,
+        photo_token,
+        photo_url,
     }
     .render()
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "template error"))?;

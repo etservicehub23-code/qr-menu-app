@@ -7,6 +7,7 @@ use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Redirect};
 use serde::Deserialize;
 use sqlx::PgPool;
+use std::sync::Arc;
 use tower_sessions::Session;
 
 pub const USER_ID_KEY: &str = "user_id";
@@ -18,6 +19,8 @@ const MIN_PASSWORD_LEN: usize = 8;
 pub struct AppState {
     pub pool: PgPool,
     pub base_url: String,
+    pub s3: Arc<dyn object_store::ObjectStore>,
+    pub s3_bucket: String,
 }
 
 #[derive(Template)]

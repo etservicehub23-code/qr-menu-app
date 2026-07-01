@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["multipart"] }
+object_store = { version = "0.11", features = ["aws"] }
 tokio = { version = "1.52.3", features = ["full"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "migrate"] }
 argon2 = { version = "0.5.3", features = ["password-hash", "rand"] }
