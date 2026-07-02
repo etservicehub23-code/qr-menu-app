@@ -970,3 +970,45 @@ one rather than deferring that migration.
     (f) `cargo build` clean. Run exactly one codex-oracle prompt on the step 2 diff.
     Keep to a single small increment; do not add edit-form photo display or deletion
     logic in this same step if it grows too large.
+
+- 2026-07-02 (evening): M6 step 2 — actual S3 photo upload with MIME validation and 5 MB
+  streaming cap. Changes across 5 files (commit `e5b7d6c`):
+  - `src/auth.rs`: added `s3_public_base: String` to `AppState` (= `s3_endpoint/s3_bucket`,
+    app-generated, not user input, used to construct `photo_url` stored in DB).
+  - `src/main.rs`: computes `s3_public_base = trim(s3_endpoint) + "/" + s3_bucket`; passes
+    it into `AppState`.
+  - `src/uploads.rs`: full upload implementation — enforces field name `"photo"` as second
+    field, streams bytes in chunks with 5 MB application-level cap (413 on overflow), detects
+    JPEG/PNG/WebP via magic bytes (rejects SVG and other types), rejects unexpected extra
+    fields, uploads to S3 using `object_store::PutPayload::from(Vec<u8>)` with key
+    `menu-items/{item_id}/{uuid}.{ext}`, stores the public URL in `menu_items.photo_url`.
+  - `Cargo.toml`: added `uuid = { version = "1", features = ["v4"] }`.
+  - `cargo build` clean (one expected dead-code warning for unused `s3_bucket` field).
+    Pushed to main.
+  - Oracle verdict: **flagged — do not proceed to M6 step 3 yet** (confidence high). "The
+    S3 call is API-correct for object_store 0.11.2, and storing photo_url as an app-generated
+    URL is acceptable from an injection standpoint. Field-order enforcement is mostly sound.
+    The blocker is that Axum Multipart still has its default 2 MB request limit, so the
+    claimed 5 MB upload cap is not actually reachable." Concrete concerns, ranked:
+    1. **Effective upload limit is 2 MB, not 5 MB (primary blocker)**: `src/main.rs` does
+       not set `DefaultBodyLimit` for the `/items/{id}/photo` route. Axum 0.8 `Multipart`
+       defaults to a 2 MB body limit. The application-level 5 MB chunked cap in
+       `uploads.rs` is never reached — the framework rejects bodies > 2 MB before the
+       handler sees them. This directly contradicts M6 step 2's intended "5 MB cap."
+    2. Magic-byte check is only signature detection — accepts truncated files (e.g. 3 bytes
+       of JPEG header with no image data) and can be bypassed by polyglot files. Not a
+       security blocker (the file goes to S3, not executed), but worth documenting.
+    3. Full `photo_url` storage is acceptable (app-generated config + UUID key, not user
+       input): oracle confirmed it is safe to embed in `<img src>`.
+    4. `s3_public_base` is built from raw `s3_endpoint` without URL validation (endpoint
+       could be a malformed value from env). Non-blocking for now.
+  - Per the working agreement, **do not proceed to M6 step 3 or any new feature work.**
+    Next run must:
+    (a) Add `DefaultBodyLimit::max(6 * 1024 * 1024)` (6 MB, to accommodate multipart
+        overhead on top of the 5 MB image limit) to the `/items/{id}/photo` route in
+        `src/main.rs`. Use `axum::extract::DefaultBodyLimit` or
+        `tower_http::limit::RequestBodyLimitLayer` applied only to that route (not globally,
+        since other routes don't need a raised limit).
+    (b) `cargo build` clean.
+    (c) Run exactly one codex-oracle prompt confirming the body limit fix resolves the
+        flagged 2 MB vs. 5 MB discrepancy and whether M6 step 3 is now unblocked.
