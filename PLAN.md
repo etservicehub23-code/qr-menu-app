@@ -934,3 +934,39 @@ one rather than deferring that migration.
         remaining DoS concern and whether M6 step 2 is now unblocked.
     Note: `allow_http` URL-parsing improvement and explicit insecure-HTTP flag are
     deferred (non-blocking); the bounded CSRF read is the only blocker.
+
+- 2026-07-02: M6 step 1 revision 3 — fixed oracle-flagged unbounded first-field read in
+  `src/uploads.rs`. Replaced `first_field.text().await` with a manual `Field::chunk()`
+  loop capped at `MAX_CSRF_FIELD_BYTES = 512`. The loop accumulates chunks into a buffer;
+  if the accumulated length exceeds 512 bytes at any chunk boundary, it immediately returns
+  `413 Payload Too Large` before `verify_csrf_token` is called. After the loop, the buffer
+  is decoded as UTF-8 and passed to CSRF verification. `cargo build` clean (expected dead-code
+  warning for unused s3/s3_bucket fields, pre-existing). Commit `6471623`, pushed to main.
+  - Oracle verdict: **approved / M6 step 2 unblocked** (confidence high). "Yes, the revision
+    resolves the flagged `first_field.text().await` unbounded application-buffer read. The
+    512-byte accumulated cap is checked inside the `chunk()` loop, and 413 Payload Too Large
+    returns before `verify_csrf_token`. I do not see a memory-safety issue in this stub.
+    M6 step 2 is unblocked; this revision does not need rework first." Non-blocking notes:
+    1. The 512-byte cap is an application accumulation cap, not a parser/body-frame cap —
+       one already-buffered oversized chunk can exist before rejection. Not a hard socket-
+       level cap, but prevents unbounded application buffer allocation (adequate for this
+       project's threat model).
+    2. Stub still accepts any second field name and ignores extra fields — explicitly
+       deferred to M6 step 2.
+    3. Comment at line 66 slightly overstates "consume" for the file field; the code
+       obtains the next field via next_field() but does not read its bytes.
+  - Next run: proceed to **M6 step 2** — actual S3 upload implementation in `upload_photo`.
+    Per oracle guidance, the step 2 implementation must:
+    (a) Enforce second field name == `"photo"` (reject if different).
+    (b) Stream file bytes in chunks with an explicit hard byte limit (e.g. 5 MB or per
+        PLAN.md's decided limit) — accumulate into a buffer or stream directly to S3,
+        but reject with 413 before completing the upload if the limit is exceeded.
+    (c) MIME validation: read the first few bytes (magic bytes), validate it is JPEG,
+        PNG, or WebP (reject SVG and other types).
+    (d) Reject extra multipart fields beyond the two expected (authenticity_token + photo).
+    (e) Upload the validated bytes to S3 using `state.s3` / `state.s3_bucket`; generate
+        a deterministic key (e.g. `menu-items/{item_id}/{uuid}.{ext}`) and store it as
+        `photo_url` in the `menu_items` row.
+    (f) `cargo build` clean. Run exactly one codex-oracle prompt on the step 2 diff.
+    Keep to a single small increment; do not add edit-form photo display or deletion
+    logic in this same step if it grows too large.
