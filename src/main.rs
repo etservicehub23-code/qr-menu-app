@@ -90,6 +90,15 @@ async fn main() {
     // Allow plain HTTP only for endpoints that explicitly use http://.
     // This prevents credentials from being sent over plaintext if config drifts to HTTPS.
     let allow_http = s3_endpoint.starts_with("http://");
+
+    // Canonical base for constructing public photo URLs: endpoint + bucket.
+    // Trailing slash on endpoint is trimmed to avoid double-slash in URLs.
+    let s3_public_base = format!(
+        "{}/{}",
+        s3_endpoint.trim_end_matches('/'),
+        s3_bucket
+    );
+
     let s3: Arc<dyn object_store::ObjectStore> = Arc::new(
         AmazonS3Builder::new()
             .with_endpoint(&s3_endpoint)
@@ -102,7 +111,7 @@ async fn main() {
             .expect("failed to build S3 client"),
     );
 
-    let state = AppState { pool, base_url, s3, s3_bucket };
+    let state = AppState { pool, base_url, s3, s3_bucket, s3_public_base };
 
     let app = Router::new()
         .route("/health", get(health))

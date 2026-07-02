@@ -21,6 +21,9 @@ pub struct AppState {
     pub base_url: String,
     pub s3: Arc<dyn object_store::ObjectStore>,
     pub s3_bucket: String,
+    /// Base URL for constructing public photo URLs: "{s3_endpoint}/{s3_bucket}".
+    /// App-generated (not user input) — safe to embed in img src.
+    pub s3_public_base: String,
 }
 
 #[derive(Template)]
