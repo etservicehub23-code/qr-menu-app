@@ -9,10 +9,12 @@ body{font-family:sans-serif;max-width:600px;margin:0 auto;padding:1rem}
 h1{font-size:1.8rem;margin-bottom:.5rem}
 h2{font-size:1.2rem;margin-top:1.5rem;border-bottom:1px solid #ccc;padding-bottom:.2rem}
 ul.items{list-style:none;padding:0;margin:0}
-ul.items li{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;padding:.5rem 0;border-bottom:1px solid #eee}
-.name{font-weight:bold;flex:1}
+ul.items li{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;padding:.5rem 0;border-bottom:1px solid #eee;gap:.5rem}
+.item-thumb{width:56px;height:56px;object-fit:cover;border-radius:4px;flex-shrink:0}
+.item-info{flex:1;min-width:0}
+.name{font-weight:bold}
 .price{color:#555;white-space:nowrap;margin-left:1rem}
-p.desc{width:100%;margin:.2rem 0 0;font-size:.9rem;color:#666}
+p.desc{margin:.2rem 0 0;font-size:.9rem;color:#666}
 </style>
 </head>
 <body>
@@ -24,7 +26,7 @@ p.desc{width:100%;margin:.2rem 0 0;font-size:.9rem;color:#666}
 <h2>{{ section.category_name }}</h2>
 <ul class="items">
 {% for item in section.items %}
-<li><span class="name">{{ item.name }}</span><span class="price">€{{ item.price }}</span>{% match item.description %}{% when Some with (desc) %}<p class="desc">{{ desc }}</p>{% when None %}{% endmatch %}</li>
+<li>{% match item.photo_url %}{% when Some with (url) %}<img class="item-thumb" src="{{ url }}" alt="">{% when None %}{% endmatch %}<div class="item-info"><span class="name">{{ item.name }}</span><span class="price">€{{ item.price }}</span>{% match item.description %}{% when Some with (desc) %}<p class="desc">{{ desc }}</p>{% when None %}{% endmatch %}</div></li>
 {% endfor %}
 </ul>
 {% endfor %}

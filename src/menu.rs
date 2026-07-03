@@ -8,6 +8,7 @@ struct MenuItem {
     name: String,
     description: Option<String>,
     price: String,
+    photo_url: Option<String>,
 }
 
 struct MenuSection {
@@ -38,8 +39,8 @@ pub async fn public_menu(
         return Err((StatusCode::NOT_FOUND, "menu not found"));
     };
 
-    let rows: Vec<(i64, String, String, Option<String>, i32)> = sqlx::query_as(
-        "SELECT mc.id, mc.name, mi.name, mi.description, mi.price_cents
+    let rows: Vec<(i64, String, String, Option<String>, i32, Option<String>)> = sqlx::query_as(
+        "SELECT mc.id, mc.name, mi.name, mi.description, mi.price_cents, mi.photo_url
          FROM menu_categories mc
          JOIN menu_items mi ON mi.category_id = mc.id AND mi.is_available = true
          WHERE mc.restaurant_id = $1
@@ -53,7 +54,7 @@ pub async fn public_menu(
     let mut sections: Vec<MenuSection> = Vec::new();
     let mut current_cat: Option<i64> = None;
 
-    for (cat_id, cat_name, item_name, item_desc, price_cents) in rows {
+    for (cat_id, cat_name, item_name, item_desc, price_cents, photo_url) in rows {
         if current_cat != Some(cat_id) {
             sections.push(MenuSection {
                 category_name: cat_name,
@@ -66,6 +67,7 @@ pub async fn public_menu(
                 name: item_name,
                 description: item_desc.filter(|d| !d.is_empty()),
                 price: format!("{:.2}", price_cents as f64 / 100.0),
+                photo_url: photo_url.filter(|u| !u.is_empty()),
             });
         }
     }
