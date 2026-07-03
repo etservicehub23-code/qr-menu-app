@@ -8,6 +8,7 @@ mod uploads;
 
 use auth::AppState;
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{get, post},
     Router,
 };
@@ -129,7 +130,11 @@ async fn main() {
         .route("/items/{id}/edit", get(items::edit_form).post(items::edit))
         .route("/items/{id}/delete", post(items::delete))
         .route("/items/{id}/toggle", post(items::toggle))
-        .route("/items/{id}/photo", post(uploads::upload_photo))
+        .route(
+            "/items/{id}/photo",
+            post(uploads::upload_photo)
+                .layer(DefaultBodyLimit::max(6 * 1024 * 1024)),
+        )
         .route("/m/{slug}", get(menu::public_menu))
         .route("/restaurants/{id}/qr", get(qr::qr_svg))
         .layer(session_layer)
