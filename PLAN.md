@@ -1012,3 +1012,35 @@ one rather than deferring that migration.
     (b) `cargo build` clean.
     (c) Run exactly one codex-oracle prompt confirming the body limit fix resolves the
         flagged 2 MB vs. 5 MB discrepancy and whether M6 step 3 is now unblocked.
+
+- 2026-07-03: M6 step 2 revision 2 — fixed oracle-flagged body limit discrepancy.
+  In `src/main.rs`: added `use axum::extract::DefaultBodyLimit;` and applied
+  `.layer(DefaultBodyLimit::max(6 * 1024 * 1024))` scoped to the
+  `/items/{id}/photo` MethodRouter only (not globally). This raises the Axum
+  Multipart framework limit for that route from the default 2 MB to 6 MB, making
+  the 5 MB app-level streaming cap in `uploads.rs` reachable. Other routes are
+  unaffected. `cargo build` clean (only pre-existing dead-code warning).
+  Commit `736a827`, pushed to main.
+  - Oracle verdict: **approved / M6 step 3 unblocked** (confidence high). "Yes.
+    In Axum 0.8, applying `.layer(DefaultBodyLimit::max(...))` directly to the
+    MethodRouter for POST /items/{id}/photo correctly changes the default body limit
+    for that route only. Multipart honors DefaultBodyLimit, so this makes the 5 MiB
+    streaming cap in uploads.rs reachable instead of being preempted by Axum's 2 MiB
+    default. A 6 MiB total multipart ceiling is reasonable for a 5 MiB file cap plus
+    normal multipart overhead. This resolves the specific 2 MiB vs 5 MiB discrepancy.
+    M6 step 3 is unblocked." Non-blocking notes:
+    1. No regression test proves boundary behavior — `cargo build` only confirms
+       compilation; does not prove ~5 MiB succeeds and >6 MiB body fails at runtime.
+    2. Unit ambiguity: comments say "5 MB" but code uses binary MiB; not a blocker
+       but should be consistent. Oracle suggests named constant for 6 * 1024 * 1024.
+    3. Optional cleanup: replace magic number with a named const; harmonize MB/MiB
+       in comments.
+  - Next run: proceed to **M6 step 3** — display the uploaded photo in the item edit
+    form and public menu page. Specifically:
+    (a) In the item edit form template (Askama), show the current `photo_url` if set
+        (render an `<img>` tag) and include the upload form below it.
+    (b) In the public menu template, render item photos if `photo_url` is non-empty
+        (small thumbnail next to item name/price/description).
+    (c) Scope to templates and handler query changes only; do not add deletion logic
+        or image resizing in this step.
+    (d) `cargo build` clean. Run exactly one codex-oracle prompt on the step 3 changes.
