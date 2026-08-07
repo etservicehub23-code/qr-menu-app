@@ -210,11 +210,7 @@ one rather than deferring that migration.
     migration is only safe pre-production — confirmed true here (no
     shared DB exists yet); once a real environment runs this
     migration, use a follow-up migration instead of editing history.
-  - Next run: proceed to the remaining piece of Milestone 1 — owner
-    signup/login. Per PLAN.md's tech stack and the oracle's
-    suggestions: argon2 for password hashing, `tower-sessions` or
-    `axum-login` for sessions (no hand-rolled session crypto), CSRF
-    protection on the auth forms, session rotation on login and
+  - 2026-07-30 (current run): Focus is solely on resolving critical vulnerabilities flagged by the oracle in Milestone 1. The required changes are: (a) fixing the `/logout` link from a GET to a POST form in `src/auth.rs`. (b) relaxing the dependency pin for `tower-sessions` in `Cargo.toml` from `"=0.14.0"` to `"0.14"`. (c) explicitly configuring session cookie expiry parameters and tightening error handling messages where feasible without adding new features. This is a pure refactoring step aimed at getting approval for the next functional milestone (Milestone 2).
     invalidation on logout, and basic rate limiting on login/signup.
     Keep this to the smallest reasonable first slice (e.g. signup +
     login with argon2 + sessions) rather than building all of CSRF +
