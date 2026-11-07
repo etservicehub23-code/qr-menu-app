@@ -1072,3 +1072,41 @@ one rather than deferring that migration.
     (c) Consider storing `photo_object_key` separately from `photo_url` in the DB if parsing
         the URL to derive the key becomes brittle.
     (d) `cargo build` clean. Run exactly one codex-oracle prompt on the step 4 changes.
+
+- 2026-11-07: M6 step 4 — photo deletion/cleanup on item delete and photo replacement.
+  Added S3 cleanup to both paths: in `uploads.rs`, fetch old photo_url and delete the
+  old S3 object before uploading a new one; in `items.rs::delete`, changed the guarded
+  DELETE RETURNING to also return photo_url, then delete the orphaned S3 object
+  (best-effort). Also fixed malformed migration filename
+  `2026-07-13_add_branding_fields.sql` → `20260713000000_add_branding_fields.sql`
+  (sqlx requires integer version prefix; pre-existing issue from a manual commit).
+  `cargo build` clean. Commit `9464e40`, pushed to main.
+  - Oracle verdict: **flagged / not approved** (confidence high). Three high-severity
+    issues:
+    1. **High: Old S3 object deleted BEFORE new upload** — if upload fails, DB still
+       references a now-deleted object. Fix: upload new object first, update DB
+       (check rows_affected == 1), then delete old object. If DB update fails,
+       best-effort delete the new object to avoid orphaned storage.
+    2. **High: DB errors silently swallowed** — `.ok().flatten()` on the fetch treats
+       connection failures and RowNotFound identically; propagate DB errors explicitly.
+    3. **High: Replacement UPDATE does not check rows_affected** — if item is concurrently
+       deleted after the auth check but before the UPDATE, new S3 object is uploaded
+       with no DB row to anchor it; check rows_affected() == 1.
+    Non-blocking: S3 cleanup failures silently discarded (log at minimum), concurrent
+    replacement race (non-blocking but noted), URL key extraction is brittle (oracle
+    recommends storing photo_object_key separately).
+    Oracle's recommended replacement order for uploads: (1) lock/read owned item row,
+    (2) upload new object, (3) UPDATE DB and verify 1 row affected, (4) delete old
+    object; if UPDATE fails, best-effort delete the new object.
+  - Per the working agreement, this counts as a flagged step: **do not proceed to M6
+    step 5 or any new feature work yet.** Next run must revise `src/uploads.rs`:
+    (a) Fix ordering: upload new object FIRST, then UPDATE the DB row (guarded by
+        item_id + owner_id JOIN), check rows_affected == 1; if UPDATE fails, delete the
+        new object; only after successful DB update, delete the old object (best-effort).
+    (b) Replace `.ok().flatten()` with explicit error propagation for the DB fetch.
+    (c) Optionally add `photo_object_key TEXT` migration as a cleaner alternative to
+        URL parsing (oracle recommended this, but the minimum to clear the flag is fixing
+        the ordering and error handling).
+    (d) `cargo build` clean.
+    (e) Run exactly one codex-oracle prompt confirming the control-flow reversal and
+        rows_affected check resolve the three high-severity issues.
