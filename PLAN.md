@@ -1110,3 +1110,22 @@ one rather than deferring that migration.
     (d) `cargo build` clean.
     (e) Run exactly one codex-oracle prompt confirming the control-flow reversal and
         rows_affected check resolve the three high-severity issues.
+
+- 2026-11-07 (evening): M6 step 4 revision resolved — three oracle-flagged high-severity
+  issues fixed in src/uploads.rs. (1) Upload ordering corrected: new S3 object uploaded
+  FIRST; DB UPDATE is guarded (item_id + owner_id JOIN); old object deleted only after
+  DB confirms success. (2) DB errors propagated explicitly via
+  fetch_optional(...).map_err(...)?.flatten() instead of .ok().flatten().
+  (3) rows_affected check: matches!(&update_result, Ok(r) if r.rows_affected() == 1);
+  rollback deletes new object on failure. Added eprintln! logging to all S3 cleanup
+  error paths. cargo build clean. Commit 3cea4a3, pushed to main.
+  - Oracle verdict: **approved / M6 step 5 unblocked** (confidence high). The three
+    high-severity issues are resolved. Non-blocking notes: concurrent replacements can
+    leave an orphaned new object (storage leak, not data loss; deferred); key derivation
+    via strip_prefix is brittle (store photo_object_key is the stronger fix, deferred);
+    no failure-injection tests yet.
+  - Next run: proceed to **M6 step 5** — rate limiting on /login and /signup. Add a
+    simple in-memory rate limiter (fixed-window per IP, ~10 requests / 15 minutes)
+    using DashMap<IpAddr, ...> in AppState, returning 429 on excess. Explicit session
+    cookie expiry config can be included in the same step if it stays small. Rate
+    limiting must land before Milestone 7 (deployment) per prior oracle guidance.

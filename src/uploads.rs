@@ -173,7 +173,9 @@ pub async fn upload_photo(
     let db_ok = matches!(&update_result, Ok(r) if r.rows_affected() == 1);
     if !db_ok {
         // DB update failed or item was concurrently deleted; remove the just-uploaded object.
-        let _ = state.s3.delete(&s3_path).await;
+        if let Err(e) = state.s3.delete(&s3_path).await {
+            eprintln!("[uploads] warning: rollback delete of new object failed: {e}");
+        }
         return Err((StatusCode::INTERNAL_SERVER_ERROR, "failed to save photo reference"));
     }
 
