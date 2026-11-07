@@ -126,20 +126,23 @@ pub async fn upload_photo(
         return Err((StatusCode::BAD_REQUEST, "unexpected extra multipart fields"));
     }
 
-    // 6a. Delete the existing photo from S3 (best-effort) before uploading the replacement.
-    let old_url: Option<String> = sqlx::query_scalar("SELECT photo_url FROM menu_items WHERE id = $1")
-        .bind(item_id)
-        .fetch_one(&state.pool)
-        .await
-        .ok()
-        .flatten();
-    if let Some(url) = old_url {
-        if let Some(key) = url.strip_prefix(&format!("{}/", state.s3_public_base)) {
-            let _ = state.s3.delete(&S3Path::from(key)).await;
-        }
-    }
+    // 6. Fetch the existing photo_url with explicit error propagation.
+    //    Scoped by owner_id (guarded SELECT) so a concurrent ownership change is safe.
+    let old_photo_url: Option<String> = sqlx::query_scalar(
+        "SELECT mi.photo_url
+         FROM menu_items mi
+         JOIN menu_categories mc ON mc.id = mi.category_id
+         JOIN restaurants r ON r.id = mc.restaurant_id
+         WHERE mi.id = $1 AND r.owner_id = $2",
+    )
+    .bind(item_id)
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "database error"))?
+    .flatten();
 
-    // 6b. Upload to S3 with an app-generated key: menu-items/{item_id}/{uuid}.{ext}.
+    // 7. Upload the new S3 object FIRST. Only proceed to DB update if upload succeeds.
     let object_key = format!("menu-items/{item_id}/{}.{ext}", Uuid::new_v4());
     let s3_path = S3Path::from(object_key.as_str());
     let payload = object_store::PutPayload::from(photo_buf);
@@ -149,14 +152,39 @@ pub async fn upload_photo(
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to upload photo to storage"))?;
 
-    // 7. Store the public URL (not the raw key) so the template can render it as <img src>.
-    //    s3_public_base is app-generated from trusted config, not from user input.
-    let photo_url = format!("{}/{}", state.s3_public_base, object_key);
-    sqlx::query("UPDATE menu_items SET photo_url = $1 WHERE id = $2")
-        .bind(&photo_url)
-        .execute(&state.pool)
-        .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to save photo reference"))?;
+    // 8. Update DB (guarded: item must still belong to this owner). Check exactly 1 row affected.
+    //    If the update fails or the item no longer exists, clean up the uploaded object.
+    let new_photo_url = format!("{}/{}", state.s3_public_base, object_key);
+    let update_result = sqlx::query(
+        "UPDATE menu_items
+         SET photo_url = $1
+         FROM menu_categories mc
+         JOIN restaurants r ON r.id = mc.restaurant_id
+         WHERE menu_items.id = $2
+           AND menu_items.category_id = mc.id
+           AND r.owner_id = $3",
+    )
+    .bind(&new_photo_url)
+    .bind(item_id)
+    .bind(user_id)
+    .execute(&state.pool)
+    .await;
+
+    let db_ok = matches!(&update_result, Ok(r) if r.rows_affected() == 1);
+    if !db_ok {
+        // DB update failed or item was concurrently deleted; remove the just-uploaded object.
+        let _ = state.s3.delete(&s3_path).await;
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, "failed to save photo reference"));
+    }
+
+    // 9. DB update confirmed; now best-effort delete the old S3 object.
+    if let Some(url) = old_photo_url {
+        if let Some(key) = url.strip_prefix(&format!("{}/", state.s3_public_base)) {
+            if let Err(e) = state.s3.delete(&S3Path::from(key)).await {
+                eprintln!("[uploads] warning: failed to delete old S3 object {key}: {e}");
+            }
+        }
+    }
 
     Ok(Redirect::to(&format!("/items/{item_id}/edit")))
 }

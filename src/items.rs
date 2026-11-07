@@ -347,7 +347,9 @@ pub async fn delete(
     // Best-effort S3 cleanup: delete the orphaned photo object after the DB row is gone.
     if let Some(url) = photo_url {
         if let Some(key) = url.strip_prefix(&format!("{}/", state.s3_public_base)) {
-            let _ = state.s3.delete(&S3Path::from(key)).await;
+            if let Err(e) = state.s3.delete(&S3Path::from(key)).await {
+                eprintln!("[items] warning: failed to delete S3 object {key} for deleted item {item_id}: {e}");
+            }
         }
     }
 
