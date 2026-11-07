@@ -126,7 +126,20 @@ pub async fn upload_photo(
         return Err((StatusCode::BAD_REQUEST, "unexpected extra multipart fields"));
     }
 
-    // 6. Upload to S3 with an app-generated key: menu-items/{item_id}/{uuid}.{ext}.
+    // 6a. Delete the existing photo from S3 (best-effort) before uploading the replacement.
+    let old_url: Option<String> = sqlx::query_scalar("SELECT photo_url FROM menu_items WHERE id = $1")
+        .bind(item_id)
+        .fetch_one(&state.pool)
+        .await
+        .ok()
+        .flatten();
+    if let Some(url) = old_url {
+        if let Some(key) = url.strip_prefix(&format!("{}/", state.s3_public_base)) {
+            let _ = state.s3.delete(&S3Path::from(key)).await;
+        }
+    }
+
+    // 6b. Upload to S3 with an app-generated key: menu-items/{item_id}/{uuid}.{ext}.
     let object_key = format!("menu-items/{item_id}/{}.{ext}", Uuid::new_v4());
     let s3_path = S3Path::from(object_key.as_str());
     let payload = object_store::PutPayload::from(photo_buf);

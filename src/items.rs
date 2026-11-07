@@ -4,6 +4,7 @@ use askama::Template;
 use axum::extract::{Form, Path, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Redirect};
+use object_store::path::Path as S3Path;
 use serde::Deserialize;
 use tower_sessions::Session;
 
@@ -325,14 +326,15 @@ pub async fn delete(
     verify_csrf_token(&session, &form.authenticity_token).await?;
 
     // Guarded DELETE: only removes the item if it belongs to owner's restaurant.
-    let category_id: Option<i64> = sqlx::query_scalar(
+    // Returns category_id and photo_url so we can clean up S3 after the row is gone.
+    let result: Option<(i64, Option<String>)> = sqlx::query_as(
         "DELETE FROM menu_items
          USING menu_categories mc
          JOIN restaurants r ON r.id = mc.restaurant_id
          WHERE menu_items.id = $1
            AND menu_items.category_id = mc.id
            AND r.owner_id = $2
-         RETURNING menu_items.category_id",
+         RETURNING menu_items.category_id, menu_items.photo_url",
     )
     .bind(item_id)
     .bind(user_id)
@@ -340,7 +342,15 @@ pub async fn delete(
     .await
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to delete item"))?;
 
-    let category_id = category_id.ok_or((StatusCode::NOT_FOUND, "item not found"))?;
+    let (category_id, photo_url) = result.ok_or((StatusCode::NOT_FOUND, "item not found"))?;
+
+    // Best-effort S3 cleanup: delete the orphaned photo object after the DB row is gone.
+    if let Some(url) = photo_url {
+        if let Some(key) = url.strip_prefix(&format!("{}/", state.s3_public_base)) {
+            let _ = state.s3.delete(&S3Path::from(key)).await;
+        }
+    }
+
     Ok(Redirect::to(&format!("/categories/{category_id}/items")))
 }
 
