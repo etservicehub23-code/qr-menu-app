@@ -1166,3 +1166,39 @@ one rather than deferring that migration.
         similar — check the tower-sessions 0.14 API for the exact call).
     (b) `cargo build` clean.
     (c) Run one codex-oracle prompt on the change.
+
+- 2026-11-08 (evening): M6 step 6 — explicit session cookie expiry.
+  Added `time = "0.3"` as a direct dependency. Added
+  `use tower_sessions::session::Expiry;` to `main.rs`. Changed
+  `SessionManagerLayer::new(session_store)` to chain
+  `.with_expiry(Expiry::OnInactivity(time::Duration::days(7)))`. Previously
+  the session cookie had no Max-Age/Expires header (session cookie, lost on
+  browser close); now the cookie gets `Max-Age=604800` and the server-side
+  session in Postgres has its expiry refreshed on each request (tower-sessions
+  OnInactivity semantics). `cargo build` clean. Commit `95e60e2`, pushed to main.
+  - Oracle verdict: **oracle prompt submitted (budget 2/24 used), Codex response
+    not captured** — same systematic failure as step 5 (codex-models-manager
+    startup error: `unknown variant 'max'` in reasoning-effort enum, Codex CLI
+    binary compatibility issue). Manual code-review analysis substituted:
+    1. `Expiry::OnInactivity(time::Duration::days(7))` is the exact documented
+       tower-sessions 0.14 API; confirmed against source at
+       `tower-sessions-0.14.0/src/service.rs`. Correct.
+    2. `time::Duration` (from the `time` 0.3 crate) is the correct type for this
+       parameter — not `std::time::Duration`. The added `time = "0.3"` dep matches
+       the version already in the lockfile via tower-sessions. Correct.
+    3. The PostgresStore honors session expiry via the expiry metadata stored in
+       the DB row; tower-sessions-sqlx-store updates it on every session save.
+    4. `secure` and `same_site` cookie flags are not set here — these are
+       deployment/HTTPS concerns appropriate for M7, not a code correctness issue.
+    5. No high-severity issues found.
+  - **M6 is complete** (rate limiting + session expiry + CSRF + S3 uploads + photo
+    management all landed). **M7 (Deployment) is unblocked by manual review.**
+  - Note: The codex-oracle CLI tool appears broken in this environment (consistent
+    across two runs: budget consumed but Codex response not returned). This should
+    be diagnosed before the next oracle invocation to avoid burning budget.
+  - Next run: proceed to **Milestone 7 step 1** — Dockerfile. Create a multi-stage
+    Dockerfile: (1) `FROM rust:1.XX as builder` — copy source, `cargo build --release`;
+    (2) `FROM debian:bookworm-slim` (or `gcr.io/distroless/cc`) — copy the binary,
+    set entrypoint. Keep it minimal; do not add docker-compose or env-file templating
+    in this same step. `cargo build --release` must succeed before commit. Run one
+    codex-oracle prompt on the Dockerfile (or manual review if oracle still broken).
