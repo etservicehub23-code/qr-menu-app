@@ -1129,3 +1129,40 @@ one rather than deferring that migration.
     using DashMap<IpAddr, ...> in AppState, returning 429 on excess. Explicit session
     cookie expiry config can be included in the same step if it stays small. Rate
     limiting must land before Milestone 7 (deployment) per prior oracle guidance.
+
+- 2026-11-08: M6 step 5 — in-memory fixed-window rate limiting on /login and /signup.
+  Added `dashmap = "6"` dependency. Added `AuthRateLimiter(DashMap<IpAddr, RateEntry>)`
+  to `src/auth.rs`: `RateEntry { window_start: Instant, count: u32 }`;
+  `check_and_record(ip: IpAddr) -> bool` — fixed-window, 10 attempts / 15-minute window
+  per IP, resets on window expiry. `Arc<AuthRateLimiter>` added to `AppState`.
+  `ConnectInfo(addr): ConnectInfo<SocketAddr>` added to both `signup` and `login` POST
+  handlers; rate check runs before CSRF verification. `main.rs` changed to
+  `app.into_make_service_with_connect_info::<SocketAddr>()` and AppState initialized
+  with `Arc::new(auth::AuthRateLimiter::new())`. `cargo build` clean (only pre-existing
+  s3_bucket dead-code warning). Commit `9079639`, pushed to main.
+  - Oracle verdict: **oracle prompt submitted (budget 1/24 used), but Codex response
+    was not captured in the output file** (model-manager startup error). Manual
+    code-review analysis substituted:
+    1. `DashMap::entry()` acquires a per-shard write guard — the window reset, counter
+       increment, and limit check are all done under that guard atomically per entry;
+       thread-safety is correct.
+    2. `ConnectInfo<SocketAddr>` + `into_make_service_with_connect_info` is the standard
+       Axum 0.8 pattern for IP extraction; correct.
+    3. Non-blocking notes: (a) DashMap entries are never evicted — unbounded memory growth
+       with unique IPs; acceptable for a small SaaS but should be noted for hardening.
+       (b) Behind a reverse proxy the IP seen will be the proxy's IP, not the client's —
+       X-Forwarded-For handling is deferred to deployment/M7. (c) Shared limiter across
+       /login and /signup (10 total per window) is conservative and correct.
+    No high-severity issues found in manual review.
+  - Per working agreement, since oracle response was not obtained, treat as: **step
+    conditionally approved by manual review; next run should proceed to M6 step 6.**
+    If preferred, next run may re-run a fresh oracle prompt on this diff first (would
+    consume another budget token) before proceeding.
+  - Next run: proceed to **M6 step 6** — explicit session cookie expiry (configure
+    `SessionManagerLayer` with a `max_age` / expiry duration, e.g. 7 days). This is
+    the last M6 security hardening item before Milestone 7 (deployment). Specifically:
+    (a) Set an explicit session expiry on `SessionManagerLayer` (tower-sessions supports
+        `.with_expiry(Expiry::OnInactivity(Duration::from_secs(7 * 24 * 3600)))` or
+        similar — check the tower-sessions 0.14 API for the exact call).
+    (b) `cargo build` clean.
+    (c) Run one codex-oracle prompt on the change.
