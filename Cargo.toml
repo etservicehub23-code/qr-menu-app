@@ -16,3 +16,4 @@ qrcode = "0.14"
 askama = "0.12"
 url = "2"
 uuid = { version = "1", features = ["v4"] }
+dashmap = "6"

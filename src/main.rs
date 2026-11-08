@@ -14,6 +14,7 @@ use axum::{
 };
 use object_store::aws::AmazonS3Builder;
 use sqlx::postgres::PgPoolOptions;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_sessions::SessionManagerLayer;
 use tower_sessions_sqlx_store::PostgresStore;
@@ -112,7 +113,7 @@ async fn main() {
             .expect("failed to build S3 client"),
     );
 
-    let state = AppState { pool, base_url, s3, s3_bucket, s3_public_base };
+    let state = AppState { pool, base_url, s3, s3_bucket, s3_public_base, auth_rate_limiter: Arc::new(auth::AuthRateLimiter::new()) };
 
     let app = Router::new()
         .route("/health", get(health))
@@ -143,7 +144,7 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
         .await
         .expect("failed to bind to 0.0.0.0:3000");
-    axum::serve(listener, app)
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .expect("server error");
 }

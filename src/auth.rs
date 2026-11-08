@@ -2,18 +2,56 @@ use argon2::password_hash::rand_core::{OsRng, RngCore};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
 use askama::Template;
+use axum::extract::connect_info::ConnectInfo;
 use axum::extract::{Form, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Redirect};
+use dashmap::DashMap;
 use serde::Deserialize;
 use sqlx::PgPool;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tower_sessions::Session;
 
 pub const USER_ID_KEY: &str = "user_id";
 const CSRF_TOKENS_KEY: &str = "csrf_tokens";
 const CSRF_TOKEN_POOL_CAP: usize = 16;
 const MIN_PASSWORD_LEN: usize = 8;
+
+const AUTH_RATE_LIMIT_MAX: u32 = 10;
+const AUTH_RATE_WINDOW: Duration = Duration::from_secs(15 * 60);
+
+struct RateEntry {
+    window_start: Instant,
+    count: u32,
+}
+
+/// Fixed-window in-memory rate limiter for auth endpoints, keyed by IP address.
+/// Each IP is allowed AUTH_RATE_LIMIT_MAX attempts per AUTH_RATE_WINDOW.
+pub struct AuthRateLimiter(DashMap<IpAddr, RateEntry>);
+
+impl AuthRateLimiter {
+    pub fn new() -> Self {
+        Self(DashMap::new())
+    }
+
+    /// Records one attempt from `ip`. Returns true if within the limit, false
+    /// (429) if the window's quota is exhausted.
+    pub fn check_and_record(&self, ip: IpAddr) -> bool {
+        let now = Instant::now();
+        let mut entry = self.0.entry(ip).or_insert_with(|| RateEntry {
+            window_start: now,
+            count: 0,
+        });
+        if now.duration_since(entry.window_start) >= AUTH_RATE_WINDOW {
+            entry.window_start = now;
+            entry.count = 0;
+        }
+        entry.count += 1;
+        entry.count <= AUTH_RATE_LIMIT_MAX
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -24,6 +62,7 @@ pub struct AppState {
     /// Base URL for constructing public photo URLs: "{s3_endpoint}/{s3_bucket}".
     /// App-generated (not user input) — safe to embed in img src.
     pub s3_public_base: String,
+    pub auth_rate_limiter: Arc<AuthRateLimiter>,
 }
 
 #[derive(Template)]
@@ -150,9 +189,13 @@ pub async fn login_form(session: Session) -> Result<Html<String>, (StatusCode, &
 
 pub async fn signup(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     session: Session,
     Form(form): Form<AuthForm>,
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
+    if !state.auth_rate_limiter.check_and_record(addr.ip()) {
+        return Err((StatusCode::TOO_MANY_REQUESTS, "too many requests, try again later"));
+    }
     verify_csrf_token(&session, &form.authenticity_token).await?;
 
     let email = form.email.trim();
@@ -196,9 +239,13 @@ pub async fn signup(
 
 pub async fn login(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     session: Session,
     Form(form): Form<AuthForm>,
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
+    if !state.auth_rate_limiter.check_and_record(addr.ip()) {
+        return Err((StatusCode::TOO_MANY_REQUESTS, "too many requests, try again later"));
+    }
     verify_csrf_token(&session, &form.authenticity_token).await?;
 
     let email = form.email.trim();
