@@ -16,6 +16,7 @@ use object_store::aws::AmazonS3Builder;
 use sqlx::postgres::PgPoolOptions;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tower_sessions::session::Expiry;
 use tower_sessions::SessionManagerLayer;
 use tower_sessions_sqlx_store::PostgresStore;
 
@@ -72,7 +73,8 @@ async fn main() {
         .migrate()
         .await
         .expect("failed to run session store migrations");
-    let session_layer = SessionManagerLayer::new(session_store);
+    let session_layer = SessionManagerLayer::new(session_store)
+        .with_expiry(Expiry::OnInactivity(time::Duration::days(7)));
 
     let base_url_raw = std::env::var("BASE_URL")
         .unwrap_or_else(|_| "http://localhost:3000".to_string());
