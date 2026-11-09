@@ -1202,3 +1202,42 @@ one rather than deferring that migration.
     set entrypoint. Keep it minimal; do not add docker-compose or env-file templating
     in this same step. `cargo build --release` must succeed before commit. Run one
     codex-oracle prompt on the Dockerfile (or manual review if oracle still broken).
+
+- 2026-11-09: M7 step 1 — Dockerfile (multi-stage build). Two commits:
+  `d1da551` (Dockerfile) and `a290963` (.dockerignore). Dockerfile structure:
+  Stage 1 (rust:1.86-slim-bookworm as builder): installs pkg-config + libssl-dev;
+  copies Cargo.toml + Cargo.lock, builds dummy main.rs to cache dep layer, then
+  copies src/ templates/ migrations/ and runs cargo build --release. Stage 2
+  (debian:bookworm-slim as runtime): installs ca-certificates, copies release
+  binary, EXPOSE 3000, ENTRYPOINT set. .dockerignore excludes target/ and .git/
+  to avoid multi-GB build context. cargo build --release succeeded locally (1
+  pre-existing dead-code warning only).
+  - Oracle verdict: **oracle CLI still broken** (3rd consecutive run; same
+    `unknown variant 'max'` reasoning-effort enum error). Manual review substituted:
+    1. Dep-caching layer trick is correct — dummy main.rs does not invoke askama
+       derive macros so templates are not needed in that phase; cache is valid.
+    2. rust:1.86 is slightly behind local 1.96 but supports edition 2024 (≥ 1.85
+       required); non-blocking.
+    3. pkg-config + libssl-dev appropriate for object_store AWS feature; ca-certificates
+       in runtime stage correct for TLS to Postgres/S3.
+    4. debian:bookworm-slim is acceptable; distroless/cc is a hardening option for
+       a later pass.
+    5. No non-root user — security gap noted, deferred to hardening pass.
+    6. No high-severity correctness or security issues found.
+  - **M7 step 2 unblocked by manual review.**
+  - Note: codex-oracle budget has consumed tokens on 3 broken runs (3/24 used).
+    Budget is being drained without getting responses. The tool is unusable until
+    the Codex CLI binary is updated to support `reasoning_effort: "max"`. Manual
+    review will continue to substitute.
+  - Next run: proceed to **M7 step 2** — docker-compose for local development.
+    Create a `docker-compose.yml` that starts:
+    (a) The app container (built from Dockerfile), with environment variables for
+        DATABASE_URL, S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY, S3_SECRET_KEY,
+        SESSION_SECRET passed via an `.env` file reference.
+    (b) A Postgres container (postgres:16-alpine) with a named volume.
+    (c) A MinIO container (minio/minio:latest) for local S3-compatible storage.
+    Also create a `.env.example` file documenting all required environment variables.
+    Do not create a real `.env` file (would contain secrets — `.gitignore` it).
+    Keep docker-compose minimal; network aliases and depends_on are appropriate.
+    cargo build is not required for this step (Dockerfile is the artifact).
+    Run manual review on docker-compose.yml (oracle still broken).
