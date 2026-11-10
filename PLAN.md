@@ -1274,3 +1274,32 @@ one rather than deferring that migration.
         up runs.
     Keep it minimal — no docker build in CI yet (that's a later hardening pass).
     Manual review required (oracle still broken).
+
+- 2026-11-10 (evening): M7 step 3 — GitHub Actions CI workflow.
+  Added `.github/workflows/ci.yml` (commit `91fe4ae`). Single job `build-and-test`
+  on `ubuntu-latest`: checkout (actions/checkout@v4), install stable Rust
+  (dtolnay/rust-toolchain@stable), cache cargo registry + target/ keyed on
+  Cargo.lock hash (actions/cache@v4), then `cargo build --locked` and
+  `cargo test --locked`. Triggers on push and pull_request to main.
+  `--locked` flag ensures the committed Cargo.lock is respected and no silent
+  dep drift occurs in CI.
+  - Oracle: CLI still broken (5th consecutive run). Manual review substituted.
+    1. `dtolnay/rust-toolchain` is preferred over unmaintained actions-rs/toolchain.
+    2. Cache paths cover the canonical Rust CI set (registry index, cache, git/db,
+       target/); key on Cargo.lock hash is correct.
+    3. `--locked` on both build and test is correct — enforces lockfile in CI.
+    4. CARGO_TERM_COLOR=always makes output readable in GitHub logs.
+    5. No sqlx offline issue — project uses runtime query(), not query!() macros.
+    6. No high-severity issues found.
+    Non-blocking: no clippy/fmt-check step (deferred); ubuntu-latest minor version
+    drift is acceptable.
+  - **M7 step 4 unblocked by manual review.**
+  - Next run: proceed to **M7 step 4** — add a non-root user to the Dockerfile.
+    The oracle flagged in M7 step 1 that running as root in the runtime container
+    is a security gap. Fix:
+    (a) In the runtime stage of Dockerfile, add `RUN useradd -r -u 1001 -g root appuser`
+        (or similar) and `USER appuser` before ENTRYPOINT.
+    (b) Ensure the binary is readable by the new user (COPY --from=builder already
+        places it in /app which will be accessible).
+    (c) `cargo build --release` is not required for this step (Dockerfile only).
+    (d) Manual review required (oracle still broken).
