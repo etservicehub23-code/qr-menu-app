@@ -1241,3 +1241,36 @@ one rather than deferring that migration.
     Keep docker-compose minimal; network aliases and depends_on are appropriate.
     cargo build is not required for this step (Dockerfile is the artifact).
     Run manual review on docker-compose.yml (oracle still broken).
+
+- 2026-11-10: M7 step 2 — docker-compose.yml and .env.example for local development.
+  Added three-service compose stack (commit `c776d34`):
+  - `app` service: built from Dockerfile, reads `.env` via `env_file`, depends_on
+    `db` and `minio` with `condition: service_healthy` (starts only after both pass
+    their healthchecks).
+  - `db` service: `postgres:16-alpine`, named volume `pgdata`, healthcheck via
+    `pg_isready -U qrmenu -d qr_menu_app`.
+  - `minio` service: `minio/minio:latest`, named volume `miniodata`, console on
+    port 9001, healthcheck via `mc ready local`. Ports 9000+9001 exposed to host
+    for direct dev access.
+  - Shared `backend` network; DB port not exposed to host.
+  - `.env.example` documents all 7 env vars (DATABASE_URL, BASE_URL, S3_ENDPOINT,
+    BUCKET, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION) with values that
+    work out of the box with the compose stack defaults.
+  - `.gitignore` updated to exclude `.env` (prevent secret commits).
+  - Oracle: CLI still broken (4th consecutive run). Manual review substituted.
+    1. `depends_on` service_healthy pattern correct; healthchecks validated.
+    2. DATABASE_URL uses `db` host (Docker network DNS) — correct.
+    3. S3_ENDPOINT uses `http://minio:9000` — matches app's allow_http logic, correct.
+    4. All env vars in .env.example match exactly what main.rs reads.
+    5. No high-severity issues found.
+    Non-blocking: MinIO bucket must be created manually (port 9001 console) before
+    photo uploads work; no restart policy (fine for dev); no resource limits (fine for dev).
+  - **M7 step 3 unblocked by manual review.**
+  - Next run: proceed to **M7 step 3** — CI configuration. Add a GitHub Actions
+    workflow at `.github/workflows/ci.yml` that:
+    (a) Triggers on push and pull_request to main.
+    (b) Runs `cargo build` and `cargo test` (even if test suite is sparse).
+    (c) Uses `actions/cache` for the cargo registry and target directory to speed
+        up runs.
+    Keep it minimal — no docker build in CI yet (that's a later hardening pass).
+    Manual review required (oracle still broken).
