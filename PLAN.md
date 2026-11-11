@@ -1303,3 +1303,40 @@ one rather than deferring that migration.
         places it in /app which will be accessible).
     (c) `cargo build --release` is not required for this step (Dockerfile only).
     (d) Manual review required (oracle still broken).
+
+- 2026-11-11: M7 step 4 — non-root user in runtime container.
+  Added `RUN useradd -r -u 1001 -g root appuser` after ca-certificates install
+  in runtime stage, and `USER appuser` immediately before ENTRYPOINT. The binary
+  is in /app (WORKDIR) owned by root with world-readable permissions (default
+  COPY behavior), so the non-root user can execute it. No cargo build required
+  (Dockerfile-only change). Commit `bfc1636`, pushed to main.
+  - Oracle: CLI still broken (6th consecutive run; same systematic failure).
+    Manual review substituted:
+    1. `useradd -r` creates a system account (no home dir, no login shell) —
+       correct for a service user.
+    2. `-u 1001 -g root` pins the UID to avoid conflicts; `-g root` keeps the
+       primary group as root which is fine since the binary is world-executable.
+    3. `USER appuser` placed after WORKDIR /app and COPY ensures the app directory
+       and binary are created as root (writable during build) and then process drops
+       privileges — correct ordering.
+    4. COPY --from=builder places the binary at /app/qr-menu-app with default mode
+       755 (world-executable), so appuser can execute it. Correct.
+    5. ENTRYPOINT uses `./qr-menu-app` relative path; working dir is /app, so the
+       binary resolves correctly. Correct.
+    6. No high-severity issues found. The security gap from step 1 is closed.
+    Non-blocking: container still writes to /app as root-owned dir but the process
+    only reads (binary + env vars); no tmpfs or volume mounts are writable by the
+    process. Distroless hardening remains a future option.
+  - **M7 step 4 approved by manual review. M7 step 5 unblocked.**
+  - Next run: proceed to **M7 step 5** — add a `HEALTHCHECK` instruction to the
+    Dockerfile. The app should expose a lightweight `/health` or `/healthz` HTTP
+    endpoint (returns 200 OK, no auth required), and the Dockerfile HEALTHCHECK
+    should curl it. Steps:
+    (a) Add a `GET /health` route in `src/main.rs` (or a small dedicated module)
+        that returns `200 OK` with body `"ok"`. No DB query needed — a static
+        response is sufficient for container health signaling.
+    (b) Add `HEALTHCHECK CMD curl -f http://localhost:3000/health || exit 1`
+        (with appropriate interval/timeout) to the Dockerfile runtime stage.
+    (c) Install `curl` in the runtime stage apt install step (needed for HEALTHCHECK).
+    (d) `cargo build` must pass before commit.
+    (e) Manual review required (oracle still broken).
