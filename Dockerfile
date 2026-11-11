@@ -26,6 +26,7 @@ FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -r -u 1001 -g root appuser
@@ -37,5 +38,8 @@ COPY --from=builder /app/target/release/qr-menu-app ./qr-menu-app
 USER appuser
 
 EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:3000/health || exit 1
 
 ENTRYPOINT ["./qr-menu-app"]
