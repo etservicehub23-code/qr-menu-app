@@ -28,9 +28,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+RUN useradd -r -u 1001 -g root appuser
+
 WORKDIR /app
 
 COPY --from=builder /app/target/release/qr-menu-app ./qr-menu-app
+
+USER appuser
 
 EXPOSE 3000
 
