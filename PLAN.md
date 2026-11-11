@@ -1340,3 +1340,30 @@ one rather than deferring that migration.
     (c) Install `curl` in the runtime stage apt install step (needed for HEALTHCHECK).
     (d) `cargo build` must pass before commit.
     (e) Manual review required (oracle still broken).
+
+- 2026-11-11 (evening): M7 step 5 — HEALTHCHECK in Dockerfile.
+  The `/health` route and handler (`async fn health() -> &'static str { "ok" }`)
+  were already present in `src/main.rs` from an earlier step. Dockerfile changes:
+  - Added `curl` to the runtime apt install (alongside ca-certificates).
+  - Added `HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \`
+      `CMD curl -f http://localhost:3000/health || exit 1`
+  `cargo build` clean (pre-existing dead-code warning only). Commit `c857be2`, pushed.
+  - Oracle: CLI still broken (7th consecutive run). Manual review substituted:
+    1. `/health` returns `200 "ok"` with no auth, no DB — correct for a probe.
+    2. `curl -f` exits non-zero on HTTP 4xx/5xx; `|| exit 1` makes the probe fail
+       correctly. `start-period=10s` avoids false failures during startup. Correct.
+    3. HEALTHCHECK placed after `USER appuser` — curl runs as the non-root user,
+       which is fine. Correct ordering.
+    4. `curl` adds ~3MB to image; acceptable for bookworm-slim. No high-severity
+       issues found.
+  - **M7 step 5 approved by manual review. M7 step 6 unblocked.**
+  - Next run: proceed to **M7 step 6** — environment variable validation at startup.
+    Currently `main.rs` reads env vars with `std::env::var(...).expect(...)`. Harden
+    this by collecting all missing/invalid vars and panicking with a single combined
+    error message rather than stopping at the first missing var. Steps:
+    (a) Gather DATABASE_URL, BASE_URL, S3_ENDPOINT, BUCKET (or S3_BUCKET),
+        AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION in a validation block.
+    (b) Collect errors into a Vec<String>; if non-empty, panic with the full list so
+        operators see all misconfigured vars at once.
+    (c) `cargo build` must pass before commit.
+    (d) Manual review required (oracle still broken).
