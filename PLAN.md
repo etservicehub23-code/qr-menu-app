@@ -1403,3 +1403,38 @@ one rather than deferring that migration.
     (d) `cargo build` and `cargo clippy -- -D warnings` must both be clean
         before commit.
     Manual review required (oracle still broken).
+
+- 2026-11-12 (evening): M7 step 7 — clippy + rustfmt in CI; dead field removal.
+  Changes across 6 files (commit `fe7c309`):
+  - `src/auth.rs`: removed unused `s3_bucket: String` field from `AppState` (the
+    S3 client already has the bucket baked in; `s3_public_base` covers URL use).
+    `cargo fmt` reformatted imports and long lines.
+  - `src/items.rs`, `src/uploads.rs`: collapsed 4 nested `if let` chains into
+    Rust 2024 let-chain syntax (`if let A && let B && let Err(e) = c.await { ... }`)
+    to fix `clippy::collapsible_if`. Logic unchanged.
+  - `src/menu.rs`: extracted local `type MenuRow = (...)` alias to fix
+    `clippy::type_complexity`.
+  - `src/uploads.rs`: fixed `clippy::doc_lazy_continuation` in doc comment
+    (added blank line before "Extra fields..." paragraph).
+  - `.github/workflows/ci.yml`: added `components: clippy, rustfmt` to toolchain
+    install; added `Clippy` step (`cargo clippy --locked -- -D warnings`) and
+    `Format check` step (`cargo fmt -- --check`) between Build and Test.
+  `cargo build`, `cargo clippy --locked -- -D warnings`, and `cargo fmt -- --check`
+  are all clean. `cargo test --locked` has no tests yet (also clean).
+  - Oracle: CLI still broken (9th consecutive run). Manual review substituted:
+    1. `s3_bucket` removal is safe — no handler reads it, `s3_public_base` and
+       the S3 client already carry the needed information. Correct.
+    2. Let-chain collapsing preserves logic; valid in async context in edition 2024.
+    3. `type MenuRow` alias is cosmetic; no behavior change.
+    4. CI `-D warnings` correctly ensures future warnings break the build. Correct.
+    5. No high-severity issues found.
+  - **M7 step 7 approved by manual review. M7 is effectively complete.**
+  - Next run: M7 is feature-complete (Dockerfile, docker-compose, CI, non-root user,
+    HEALTHCHECK, env validation, clippy/fmt). Consider the project deployment-ready
+    for a small-scale launch. Final step options:
+    (a) Write a minimal `README.md` documenting the stack, env vars, and local dev
+        setup (run via docker-compose) — not code, but useful for handoff.
+    (b) Or proceed to any remaining Polish items from Milestone 6 (e.g. analytics
+        scan-count stub, branding fields UI).
+    Recommendation: **README.md first** (small, zero compile risk, unblocks anyone
+    trying to run the project). Then revisit open items.
