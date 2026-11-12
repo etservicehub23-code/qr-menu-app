@@ -24,42 +24,103 @@ async fn health() -> &'static str {
     "ok"
 }
 
-fn validate_base_url(raw: &str) -> String {
+fn validate_base_url(raw: &str) -> Result<String, String> {
     let parsed = url::Url::parse(raw)
-        .unwrap_or_else(|e| panic!("BASE_URL is not a valid URL ({raw:?}): {e}"));
+        .map_err(|e| format!("BASE_URL is not a valid URL ({raw:?}): {e}"))?;
     match parsed.scheme() {
         "http" | "https" => {}
-        s => panic!("BASE_URL scheme must be http or https, got {s:?} in {raw:?}"),
+        s => return Err(format!("BASE_URL scheme must be http or https, got {s:?} in {raw:?}")),
     }
     if parsed.host().is_none() {
-        panic!("BASE_URL must have a non-empty host, got: {raw:?}");
+        return Err(format!("BASE_URL must have a non-empty host, got: {raw:?}"));
     }
     if !parsed.username().is_empty() || parsed.password().is_some() {
-        panic!("BASE_URL must not contain credentials, got: {raw:?}");
+        return Err(format!("BASE_URL must not contain credentials, got: {raw:?}"));
     }
     if parsed.query().is_some() {
-        panic!("BASE_URL must not contain a query string, got: {raw:?}");
+        return Err(format!("BASE_URL must not contain a query string, got: {raw:?}"));
     }
     if parsed.fragment().is_some() {
-        panic!("BASE_URL must not contain a fragment, got: {raw:?}");
+        return Err(format!("BASE_URL must not contain a fragment, got: {raw:?}"));
     }
-    // Build canonical origin: scheme + host + optional non-default port
     let mut origin = format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap());
     if let Some(port) = parsed.port() {
         origin.push(':');
         origin.push_str(&port.to_string());
     }
-    origin
+    Ok(origin)
+}
+
+struct EnvConfig {
+    database_url: String,
+    base_url: String,
+    s3_endpoint: String,
+    s3_bucket: String,
+    aws_access_key_id: String,
+    aws_secret_access_key: String,
+    aws_region: String,
+}
+
+fn collect_env_config() -> Result<EnvConfig, Vec<String>> {
+    let mut errors: Vec<String> = Vec::new();
+
+    let database_url = std::env::var("DATABASE_URL")
+        .map_err(|_| errors.push("DATABASE_URL must be set (e.g. postgres://user:pass@localhost/qr_menu_app)".to_string()))
+        .ok();
+
+    let base_url_raw = std::env::var("BASE_URL")
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let base_url = validate_base_url(&base_url_raw)
+        .map_err(|e| errors.push(e))
+        .ok();
+
+    let s3_endpoint = std::env::var("S3_ENDPOINT")
+        .map_err(|_| errors.push("S3_ENDPOINT must be set (e.g. http://localhost:9000 or https://s3.example.com)".to_string()))
+        .ok();
+
+    let s3_bucket = std::env::var("BUCKET")
+        .map_err(|_| errors.push("BUCKET must be set".to_string()))
+        .ok();
+
+    let aws_access_key_id = std::env::var("AWS_ACCESS_KEY_ID")
+        .map_err(|_| errors.push("AWS_ACCESS_KEY_ID must be set".to_string()))
+        .ok();
+
+    let aws_secret_access_key = std::env::var("AWS_SECRET_ACCESS_KEY")
+        .map_err(|_| errors.push("AWS_SECRET_ACCESS_KEY must be set".to_string()))
+        .ok();
+
+    let aws_region = std::env::var("AWS_REGION")
+        .unwrap_or_else(|_| "auto".to_string());
+
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+
+    Ok(EnvConfig {
+        database_url: database_url.unwrap(),
+        base_url: base_url.unwrap(),
+        s3_endpoint: s3_endpoint.unwrap(),
+        s3_bucket: s3_bucket.unwrap(),
+        aws_access_key_id: aws_access_key_id.unwrap(),
+        aws_secret_access_key: aws_secret_access_key.unwrap(),
+        aws_region,
+    })
 }
 
 #[tokio::main]
 async fn main() {
-    let database_url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL must be set (e.g. postgres://user:pass@localhost/qr_menu_app)");
+    let cfg = collect_env_config().unwrap_or_else(|errors| {
+        panic!(
+            "startup configuration errors ({} problem(s)):\n  - {}",
+            errors.len(),
+            errors.join("\n  - ")
+        )
+    });
 
     let pool = PgPoolOptions::new()
         .max_connections(5)
-        .connect(&database_url)
+        .connect(&cfg.database_url)
         .await
         .expect("failed to connect to Postgres");
 
@@ -76,46 +137,37 @@ async fn main() {
     let session_layer = SessionManagerLayer::new(session_store)
         .with_expiry(Expiry::OnInactivity(time::Duration::days(7)));
 
-    let base_url_raw = std::env::var("BASE_URL")
-        .unwrap_or_else(|_| "http://localhost:3000".to_string());
-    let base_url = validate_base_url(&base_url_raw);
-
-    let s3_endpoint = std::env::var("S3_ENDPOINT")
-        .expect("S3_ENDPOINT must be set (e.g. http://localhost:9000)");
-    let s3_bucket = std::env::var("BUCKET")
-        .expect("BUCKET must be set");
-    let aws_access_key_id = std::env::var("AWS_ACCESS_KEY_ID")
-        .expect("AWS_ACCESS_KEY_ID must be set");
-    let aws_secret_access_key = std::env::var("AWS_SECRET_ACCESS_KEY")
-        .expect("AWS_SECRET_ACCESS_KEY must be set");
-    let aws_region = std::env::var("AWS_REGION")
-        .unwrap_or_else(|_| "auto".to_string());
-
     // Allow plain HTTP only for endpoints that explicitly use http://.
     // This prevents credentials from being sent over plaintext if config drifts to HTTPS.
-    let allow_http = s3_endpoint.starts_with("http://");
+    let allow_http = cfg.s3_endpoint.starts_with("http://");
 
     // Canonical base for constructing public photo URLs: endpoint + bucket.
-    // Trailing slash on endpoint is trimmed to avoid double-slash in URLs.
     let s3_public_base = format!(
         "{}/{}",
-        s3_endpoint.trim_end_matches('/'),
-        s3_bucket
+        cfg.s3_endpoint.trim_end_matches('/'),
+        cfg.s3_bucket
     );
 
     let s3: Arc<dyn object_store::ObjectStore> = Arc::new(
         AmazonS3Builder::new()
-            .with_endpoint(&s3_endpoint)
-            .with_bucket_name(&s3_bucket)
-            .with_access_key_id(&aws_access_key_id)
-            .with_secret_access_key(&aws_secret_access_key)
-            .with_region(&aws_region)
+            .with_endpoint(&cfg.s3_endpoint)
+            .with_bucket_name(&cfg.s3_bucket)
+            .with_access_key_id(&cfg.aws_access_key_id)
+            .with_secret_access_key(&cfg.aws_secret_access_key)
+            .with_region(&cfg.aws_region)
             .with_allow_http(allow_http)
             .build()
             .expect("failed to build S3 client"),
     );
 
-    let state = AppState { pool, base_url, s3, s3_bucket, s3_public_base, auth_rate_limiter: Arc::new(auth::AuthRateLimiter::new()) };
+    let state = AppState {
+        pool,
+        base_url: cfg.base_url,
+        s3,
+        s3_bucket: cfg.s3_bucket,
+        s3_public_base,
+        auth_rate_limiter: Arc::new(auth::AuthRateLimiter::new()),
+    };
 
     let app = Router::new()
         .route("/health", get(health))
