@@ -1367,3 +1367,39 @@ one rather than deferring that migration.
         operators see all misconfigured vars at once.
     (c) `cargo build` must pass before commit.
     (d) Manual review required (oracle still broken).
+
+- 2026-11-12: M7 step 6 — environment variable validation at startup.
+  Replaced individual `.expect()` calls in `main()` with a new
+  `collect_env_config()` function that accumulates all missing/invalid
+  vars into a `Vec<String>` before panicking. Required vars: DATABASE_URL,
+  S3_ENDPOINT, BUCKET, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY. Optional
+  with defaults: BASE_URL (validated via `validate_base_url`, now returns
+  `Result` instead of panicking), AWS_REGION. If any errors are present,
+  `main()` panics with one combined message listing all problems. `cargo
+  build` clean (only pre-existing `s3_bucket` dead-code warning). Commit
+  `cae383b`, pushed to main.
+  - Oracle: CLI still broken (8th consecutive run). Manual review substituted:
+    1. All required vars are collected before the error check — no early exit
+       leaves later vars unchecked. Correct.
+    2. `validate_base_url` correctly converted to `Result<String, String>`;
+       error propagated via `map_err(|e| errors.push(e)).ok()`. Correct.
+    3. `AWS_REGION` and `BASE_URL` retain defaults; not treated as required.
+       Correct.
+    4. Panic message format (`N problem(s): - var1\n  - var2`) is operator-friendly.
+    5. No high-severity issues found.
+  - **M7 step 6 approved by manual review. M7 step 7 unblocked.**
+  - Next run: proceed to **M7 step 7** — add `cargo clippy` and `rustfmt`
+    checks to the GitHub Actions CI workflow. Specifically:
+    (a) Add a `clippy` step: `cargo clippy --locked -- -D warnings`
+        (denies all warnings, including the existing `s3_bucket` dead-code
+        warning — that warning must be resolved first by either removing the
+        field or adding `#[allow(dead_code)]` with a comment explaining why
+        it is kept for now).
+    (b) Add a `fmt` step: `cargo fmt --check` (fails if any file is not
+        formatted).
+    (c) Fix the `s3_bucket` dead-code warning in `src/auth.rs` before
+        enabling `-D warnings` (either use the field somewhere meaningful,
+        or suppress with `#[allow(dead_code)]`).
+    (d) `cargo build` and `cargo clippy -- -D warnings` must both be clean
+        before commit.
+    Manual review required (oracle still broken).
