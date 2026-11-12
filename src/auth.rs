@@ -1,6 +1,6 @@
+use argon2::Argon2;
 use argon2::password_hash::rand_core::{OsRng, RngCore};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use argon2::Argon2;
 use askama::Template;
 use axum::extract::connect_info::ConnectInfo;
 use axum::extract::{Form, State};
@@ -58,7 +58,6 @@ pub struct AppState {
     pub pool: PgPool,
     pub base_url: String,
     pub s3: Arc<dyn object_store::ObjectStore>,
-    pub s3_bucket: String,
     /// Base URL for constructing public photo URLs: "{s3_endpoint}/{s3_bucket}".
     /// App-generated (not user input) — safe to embed in img src.
     pub s3_public_base: String,
@@ -128,10 +127,12 @@ pub async fn new_csrf_token(session: &Session) -> Result<String, (StatusCode, &'
         pool.drain(0..pool.len() - CSRF_TOKEN_POOL_CAP);
     }
 
-    session
-        .insert(CSRF_TOKENS_KEY, &pool)
-        .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to set CSRF token"))?;
+    session.insert(CSRF_TOKENS_KEY, &pool).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to set CSRF token",
+        )
+    })?;
 
     Ok(token)
 }
@@ -194,7 +195,10 @@ pub async fn signup(
     Form(form): Form<AuthForm>,
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
     if !state.auth_rate_limiter.check_and_record(addr.ip()) {
-        return Err((StatusCode::TOO_MANY_REQUESTS, "too many requests, try again later"));
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many requests, try again later",
+        ));
     }
     verify_csrf_token(&session, &form.authenticity_token).await?;
 
@@ -203,7 +207,10 @@ pub async fn signup(
         return Err((StatusCode::BAD_REQUEST, "email must not be empty"));
     }
     if form.password.len() < MIN_PASSWORD_LEN {
-        return Err((StatusCode::BAD_REQUEST, "password must be at least 8 characters"));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "password must be at least 8 characters",
+        ));
     }
 
     let salt = SaltString::generate(&mut OsRng);
@@ -223,10 +230,16 @@ pub async fn signup(
     let user_id = match result {
         Ok(id) => id,
         Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => {
-            return Err((StatusCode::CONFLICT, "an account with that email already exists"));
+            return Err((
+                StatusCode::CONFLICT,
+                "an account with that email already exists",
+            ));
         }
         Err(_) => {
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, "failed to create account"));
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to create account",
+            ));
         }
     };
 
@@ -244,7 +257,10 @@ pub async fn login(
     Form(form): Form<AuthForm>,
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
     if !state.auth_rate_limiter.check_and_record(addr.ip()) {
-        return Err((StatusCode::TOO_MANY_REQUESTS, "too many requests, try again later"));
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many requests, try again later",
+        ));
     }
     verify_csrf_token(&session, &form.authenticity_token).await?;
 
@@ -256,14 +272,23 @@ pub async fn login(
     .bind(email)
     .fetch_optional(&state.pool)
     .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to look up account"))?;
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to look up account",
+        )
+    })?;
 
     let Some((user_id, password_hash)) = row else {
         return Err((StatusCode::UNAUTHORIZED, "invalid email or password"));
     };
 
-    let parsed_hash = PasswordHash::new(&password_hash)
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to verify password"))?;
+    let parsed_hash = PasswordHash::new(&password_hash).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to verify password",
+        )
+    })?;
     if Argon2::default()
         .verify_password(form.password.as_bytes(), &parsed_hash)
         .is_err()
@@ -302,9 +327,12 @@ pub async fn index(session: Session) -> Result<Html<String>, (StatusCode, &'stat
         String::new()
     };
 
-    let html = IndexPage { user_id, logout_token }
-        .render()
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "template error"))?;
+    let html = IndexPage {
+        user_id,
+        logout_token,
+    }
+    .render()
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "template error"))?;
     Ok(Html(html))
 }
 async fn log_in_session(

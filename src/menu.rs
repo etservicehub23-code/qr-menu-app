@@ -27,19 +27,19 @@ pub async fn public_menu(
     State(state): State<AppState>,
     Path(slug): Path<String>,
 ) -> Result<Html<String>, (StatusCode, &'static str)> {
-    let restaurant: Option<(i64, String)> = sqlx::query_as(
-        "SELECT id, name FROM restaurants WHERE slug = $1 AND is_published = true",
-    )
-    .bind(&slug)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    let restaurant: Option<(i64, String)> =
+        sqlx::query_as("SELECT id, name FROM restaurants WHERE slug = $1 AND is_published = true")
+            .bind(&slug)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
 
     let Some((restaurant_id, restaurant_name)) = restaurant else {
         return Err((StatusCode::NOT_FOUND, "menu not found"));
     };
 
-    let rows: Vec<(i64, String, String, Option<String>, i32, Option<String>)> = sqlx::query_as(
+    type MenuRow = (i64, String, String, Option<String>, i32, Option<String>);
+    let rows: Vec<MenuRow> = sqlx::query_as(
         "SELECT mc.id, mc.name, mi.name, mi.description, mi.price_cents, mi.photo_url
          FROM menu_categories mc
          JOIN menu_items mi ON mi.category_id = mc.id AND mi.is_available = true

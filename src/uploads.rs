@@ -1,4 +1,4 @@
-use crate::auth::{verify_csrf_token, AppState};
+use crate::auth::{AppState, verify_csrf_token};
 use crate::items::require_item_owner;
 use crate::restaurants::require_auth;
 use axum::extract::{Multipart, Path, State};
@@ -33,6 +33,7 @@ fn detect_image_ext(data: &[u8]) -> Option<&'static str> {
 /// Field order contract:
 ///   1. authenticity_token — CSRF token; bounded read (512 bytes max).
 ///   2. photo              — image file; streamed with 5 MB hard cap.
+///
 /// Extra fields beyond these two are rejected.
 ///
 /// Ordering: auth -> CSRF (bounded read) -> ownership -> file read + upload.
@@ -52,7 +53,10 @@ pub async fn upload_photo(
         .ok_or((StatusCode::BAD_REQUEST, "missing CSRF token field"))?;
 
     if first_field.name() != Some("authenticity_token") {
-        return Err((StatusCode::BAD_REQUEST, "first multipart field must be authenticity_token"));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "first multipart field must be authenticity_token",
+        ));
     }
 
     let mut csrf_buf = Vec::with_capacity(64);
@@ -87,7 +91,10 @@ pub async fn upload_photo(
         .ok_or((StatusCode::BAD_REQUEST, "missing photo field"))?;
 
     if photo_field.name() != Some("photo") {
-        return Err((StatusCode::BAD_REQUEST, "second multipart field must be named photo"));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "second multipart field must be named photo",
+        ));
     }
 
     // Stream photo bytes with a hard 5 MB cap.
@@ -113,8 +120,10 @@ pub async fn upload_photo(
     }
 
     // 4. MIME validation via magic bytes. Reject SVG and anything not JPEG/PNG/WebP.
-    let ext = detect_image_ext(&photo_buf)
-        .ok_or((StatusCode::UNPROCESSABLE_ENTITY, "unsupported image type; only JPEG, PNG, and WebP are accepted"))?;
+    let ext = detect_image_ext(&photo_buf).ok_or((
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "unsupported image type; only JPEG, PNG, and WebP are accepted",
+    ))?;
 
     // 5. Reject unexpected extra fields.
     if multipart
@@ -146,11 +155,12 @@ pub async fn upload_photo(
     let object_key = format!("menu-items/{item_id}/{}.{ext}", Uuid::new_v4());
     let s3_path = S3Path::from(object_key.as_str());
     let payload = object_store::PutPayload::from(photo_buf);
-    state
-        .s3
-        .put(&s3_path, payload)
-        .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to upload photo to storage"))?;
+    state.s3.put(&s3_path, payload).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to upload photo to storage",
+        )
+    })?;
 
     // 8. Update DB (guarded: item must still belong to this owner). Check exactly 1 row affected.
     //    If the update fails or the item no longer exists, clean up the uploaded object.
@@ -176,16 +186,18 @@ pub async fn upload_photo(
         if let Err(e) = state.s3.delete(&s3_path).await {
             eprintln!("[uploads] warning: rollback delete of new object failed: {e}");
         }
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, "failed to save photo reference"));
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to save photo reference",
+        ));
     }
 
     // 9. DB update confirmed; now best-effort delete the old S3 object.
-    if let Some(url) = old_photo_url {
-        if let Some(key) = url.strip_prefix(&format!("{}/", state.s3_public_base)) {
-            if let Err(e) = state.s3.delete(&S3Path::from(key)).await {
-                eprintln!("[uploads] warning: failed to delete old S3 object {key}: {e}");
-            }
-        }
+    if let Some(url) = old_photo_url
+        && let Some(key) = url.strip_prefix(&format!("{}/", state.s3_public_base))
+        && let Err(e) = state.s3.delete(&S3Path::from(key)).await
+    {
+        eprintln!("[uploads] warning: failed to delete old S3 object {key}: {e}");
     }
 
     Ok(Redirect::to(&format!("/items/{item_id}/edit")))
