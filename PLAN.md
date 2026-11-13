@@ -1438,3 +1438,51 @@ one rather than deferring that migration.
         scan-count stub, branding fields UI).
     Recommendation: **README.md first** (small, zero compile risk, unblocks anyone
     trying to run the project). Then revisit open items.
+
+- 2026-11-13: M7 final step — README.md rewrite. Replaced 7-line placeholder
+  with 85-line document covering stack, docker-compose quick start, env var
+  reference table, deployment notes (Dockerfile, non-root user, HEALTHCHECK),
+  and CI pipeline. No Rust code changed. Commit `00bddcf`, pushed to main.
+  - Oracle verdict: **flagged issues, not approved** (high confidence, budget
+    10/24 used). The oracle ran successfully this time (Codex CLI issue may
+    be intermittently resolved). Key flagged items, ranked:
+    1. **High — Rust version claim is inaccurate.** README says `>= 1.85` but
+       locked deps (`time 0.3.51`, `image 0.25.10`, `home 0.5.12`) declare
+       Rust 1.88 minimum in their manifests. Dockerfile uses `rust:1.86` builder
+       which is also below 1.88. Both need updating.
+    2. **High — Photo URLs are Docker-internal.** `main.rs` constructs photo URLs
+       from `S3_ENDPOINT/BUCKET`, producing `http://minio:9000/...` — only
+       reachable inside Docker, not in a browser. README omits the need for
+       anonymous bucket read policy and doesn't explain that `BASE_URL` does not
+       control photo links (oracle confirmed this claim in README is false).
+    3. **Medium — Native startup prerequisites incomplete.** README's
+       "Running without Docker" section omits: Postgres and S3 must already be
+       running and reachable; `.env` is not auto-loaded by the binary; startup
+       runs sqlx migrations automatically (requires schema-creation privileges and
+       permission to install the `citext` extension on the DB role).
+    4. **Medium — Rate limiter breaks behind reverse proxy (documentation gap).**
+       Rate limiter uses socket peer IP; behind a reverse proxy all users share
+       the proxy's quota (10 combined login/signup per 15-minute window per
+       process). Should be documented as a known limitation.
+    5. **Low — Minor inaccuracies.** QR output is SVG only (README says SVG/PNG).
+       `cargo fmt -- --check` doesn't use `--locked` (no such flag for fmt). No
+       application tests exist yet. `/health` is a static liveness probe, not a
+       live dependency check.
+  - Per working agreement, this counts as a flagged step: **do not proceed to
+    any new feature work yet.** Next run must revise README.md to fix the two
+    high-severity items as a minimum:
+    (a) Bump Rust version claim to >= 1.88 (or "latest stable"); update Dockerfile
+        builder from `rust:1.86-slim-bookworm` to `rust:1.88-slim-bookworm` (or
+        `rust:slim-bookworm` for always-latest stable); add `--locked` to
+        `cargo build --release` in Dockerfile for consistency.
+    (b) Rewrite the MinIO/photo section: document that MinIO's port 9001 (console)
+        and 9000 (API) are exposed to the host; explain that photo image URLs
+        point to `S3_ENDPOINT/BUCKET/...` (the MinIO API port), so either (i) use
+        `http://localhost:9000` as `S3_ENDPOINT` in .env.example for local dev
+        (browser-accessible) with `allow_http` already in the code, or (ii) set
+        an anonymous read policy on the bucket via MinIO console so unsigned URLs
+        work. Document this in quick-start.
+    (c) Fix the low-severity inaccuracies (SVG only, fmt --check has no --locked).
+    After revising README, run one fresh oracle prompt asking specifically whether
+    the two high-severity items are resolved. Only once approved should a
+    subsequent run move on to any remaining open items.
