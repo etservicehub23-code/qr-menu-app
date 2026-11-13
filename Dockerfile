@@ -1,5 +1,5 @@
 # Stage 1: build
-FROM rust:1.86-slim-bookworm AS builder
+FROM rust:1.88-slim-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
@@ -11,7 +11,7 @@ WORKDIR /app
 # Cache dependency compilation separately from source
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && echo 'fn main() {}' > src/main.rs \
-    && cargo build --release \
+    && cargo build --release --locked \
     && rm -rf src
 
 # Build the real application
@@ -19,7 +19,7 @@ COPY src ./src
 COPY templates ./templates
 COPY migrations ./migrations
 # Touch main.rs so cargo detects the change and rebuilds
-RUN touch src/main.rs && cargo build --release
+RUN touch src/main.rs && cargo build --release --locked
 
 # Stage 2: minimal runtime image
 FROM debian:bookworm-slim AS runtime
