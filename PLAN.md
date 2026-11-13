@@ -1486,3 +1486,42 @@ one rather than deferring that migration.
     After revising README, run one fresh oracle prompt asking specifically whether
     the two high-severity items are resolved. Only once approved should a
     subsequent run move on to any remaining open items.
+
+- 2026-11-13 (evening): README revision run — resolved both prior high-severity oracle flags.
+  Two commits: `3302a94` (Dockerfile rust:1.86→1.88 + --locked, .env.example note, README
+  initial fix) and `aa800fe` (MinIO mc CLI setup, rust-version in Cargo.toml, PG privilege
+  wording, rate-limiter risk wording). Also committed `7211361`: cargo fmt leftovers in
+  categories.rs, qr.rs, restaurants.rs that were missed in M7 step 7 (would have caused
+  CI fmt check to fail).
+  - Oracle run 1 (budget 10/24 → after first revision): Rust version fix accepted. Still
+    flagged: MinIO console bucket-policy UI has been removed from MinIO Community — console
+    setup instructions are non-functional for current MinIO releases.
+  - Oracle run 2 (budget 11/24 → after second revision, commit aa800fe): **Conditionally
+    approved for local dev use.** No new High-severity items. Oracle confirmed: "No
+    application-function changes are required to close the original MinIO issue." Remaining
+    items are Medium/Low and explicitly flagged as not blocking feature work:
+    1. Medium: MinIO ports exposed on all host interfaces (not just loopback); bind to
+       127.0.0.1 in a future hardening pass.
+    2. Low: mc installation link redirects to AIStor docs; should link to Community mc
+       README (https://github.com/minio/mc#readme) and pin a tested MinIO server/client
+       version pair.
+    3. Low: MSRV 1.88 declared in Cargo.toml but CI follows stable; Dockerfile's 1.88
+       builder provides implicit verification but CI doesn't assert it.
+    Oracle suggestion (non-blocking): a pinned Compose init service running mc commands
+    would remove the host mc prerequisite and make setup fully repeatable without host
+    tooling. Deferred to a future hardening pass.
+  - **README is approved. Next run may proceed to new feature work.**
+  - Open items / what comes next:
+    (a) The oracle has consistently noted that rate limiting behind a reverse proxy is
+        an availability risk (not just "not effective"). A `S3_PUBLIC_BASE_URL` env var
+        separate from `S3_ENDPOINT` would remove the shared-hostname constraint for
+        production deployments (deferred code improvement, not urgent).
+    (b) No application tests exist yet — adding at least one integration test would make
+        CI's `cargo test` meaningful.
+    (c) Analytics scan-count stub (Milestone 6 open item): increment a counter when
+        `GET /m/:slug` is served, store in a `menu_scans` table, expose a simple count
+        to the owner dashboard.
+    Recommendation for next run: proceed to **(c) scan-count stub** — it's a small,
+    self-contained Milestone 6 feature increment (one migration + one SQL INSERT on the
+    public menu handler + one count display in the owner dashboard). Keeps the
+    twice-daily cadence productive without touching deployment plumbing.
