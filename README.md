@@ -6,7 +6,7 @@ reprinting when prices change.
 
 ## Stack
 
-- **Language**: Pure Rust (edition 2024)
+- **Language**: Pure Rust (edition 2024, MSRV 1.88)
 - **Web framework**: Axum 0.8
 - **Templates**: Askama (compile-time checked, server-rendered HTML)
 - **Database**: PostgreSQL 16 via sqlx (migrations run automatically on startup)
@@ -21,37 +21,45 @@ reprinting when prices change.
 ### Prerequisites
 
 - Docker + Docker Compose
-- Rust toolchain (stable, edition 2024, >= 1.88)
+- Rust toolchain (stable >= 1.88)
+- MinIO Client (`mc`) for bucket initialization — install from
+  https://min.io/docs/minio/linux/reference/minio-mc.html
 
 ### Quick start
 
 ```bash
 cp .env.example .env
 # Edit .env if needed (defaults work with the compose stack as-is)
-docker compose up --build
+docker compose up --build -d
 ```
 
 The app binds to `http://localhost:3000`.
 
-**MinIO setup (required before photo uploads work):**
+**MinIO bucket setup (required before photo uploads work):**
 
-1. Open the MinIO console at `http://localhost:9001`
-   (credentials: `minioadmin` / `minioadmin`).
-2. Create a bucket named `qr-menu-photos`.
-3. Set the bucket's access policy to **Public** (anonymous read) so photo
-   image URLs load in the browser without credentials.
+```bash
+# Point the MinIO client at the local instance
+mc alias set qrmenu http://localhost:9000 minioadmin minioadmin
+
+# Create the bucket (safe to re-run if it already exists)
+mc mb --ignore-existing qrmenu/qr-menu-photos
+
+# Allow anonymous download so photo image URLs load in the browser
+mc anonymous set download qrmenu/qr-menu-photos
+```
 
 **Photo image URLs — hostname note:** Photo URLs are constructed as
 `S3_ENDPOINT/BUCKET/filename` (e.g. `http://minio:9000/qr-menu-photos/...`).
 Port 9000 is exposed to the host by docker-compose, but the hostname `minio`
 only resolves inside Docker by default. To make photo images load in your
-browser, add the following line to your `/etc/hosts`:
+browser on the same machine, add this line to `/etc/hosts`:
 
 ```
 127.0.0.1 minio
 ```
 
-This lets the browser resolve `minio` to localhost where port 9000 is mapped.
+This is a local-dev convenience only. Production deployments should use a
+browser-reachable object storage URL (see Deployment below).
 
 ### Environment variables
 
@@ -74,12 +82,12 @@ Requires a running Postgres instance and an S3-compatible store reachable from
 the process. The binary does **not** auto-load a `.env` file; export vars
 explicitly or use a wrapper script.
 
-On first startup, sqlx applies migrations automatically. The DB role must have
-`CREATE` privileges and permission to install the `citext` extension
-(`SUPERUSER` or `CREATE EXTENSION` privilege in Postgres 15+).
+On first startup, sqlx applies migrations automatically. The database role
+needs `CREATE` privilege on the database (sufficient for sqlx migrations and
+for installing the trusted `citext` extension on PostgreSQL 16).
 
 ```bash
-cargo build --release
+~/.cargo/bin/cargo build --release
 export DATABASE_URL=postgres://user:password@localhost/qr_menu_app
 export S3_ENDPOINT=http://localhost:9000
 export BUCKET=qr-menu-photos
@@ -99,14 +107,20 @@ The project ships with a multi-stage Dockerfile:
   a non-root system user (`appuser`, UID 1001). Container healthcheck polls
   `GET /health` every 30 s.
 
-For production, wire `DATABASE_URL` to a managed Postgres instance and
-`S3_ENDPOINT`/`BUCKET` to your object storage provider. Set `BASE_URL` to
-the public HTTPS URL behind your reverse proxy.
+For production:
+- Wire `DATABASE_URL` to a managed Postgres instance.
+- Set `S3_ENDPOINT` to a **browser-reachable** HTTPS URL (e.g. your cloud
+  object storage endpoint). Photo image URLs are constructed from this value,
+  so it must be resolvable by end-user browsers — not just the app server.
+- Set `BASE_URL` to the public HTTPS URL behind your reverse proxy.
+- Configure the bucket for anonymous download (read-only public access) so
+  unsigned photo URLs load without credentials.
 
 **Rate limiter note:** The in-process rate limiter reads the socket peer IP.
 Behind a reverse proxy (nginx, Caddy, etc.) all users will share the proxy's
-single IP quota. X-Forwarded-For handling is deferred to a future hardening
-pass; until then, the rate limiter is not effective in proxied deployments.
+single IP quota — 10 combined login/signup attempts per 15-minute window
+across all users is an availability risk in that configuration.
+X-Forwarded-For handling is deferred to a future hardening pass.
 
 ## CI
 
