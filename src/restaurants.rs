@@ -1,4 +1,4 @@
-use crate::auth::{new_csrf_token, verify_csrf_token, AppState, USER_ID_KEY};
+use crate::auth::{AppState, USER_ID_KEY, new_csrf_token, verify_csrf_token};
 use askama::Template;
 use axum::extract::{Form, State};
 use axum::http::StatusCode;
@@ -77,12 +77,13 @@ async fn unique_slug(
         }
     }
 
-    Err((StatusCode::CONFLICT, "could not generate a unique slug for this name"))
+    Err((
+        StatusCode::CONFLICT,
+        "could not generate a unique slug for this name",
+    ))
 }
 
-pub async fn new_form(
-    session: Session,
-) -> Result<Html<String>, (StatusCode, &'static str)> {
+pub async fn new_form(session: Session) -> Result<Html<String>, (StatusCode, &'static str)> {
     let _user_id = require_auth(&session).await?;
     let token = new_csrf_token(&session).await?;
     let html = RestaurantNewPage { token }
@@ -104,12 +105,18 @@ pub async fn create(
         return Err((StatusCode::BAD_REQUEST, "restaurant name must not be empty"));
     }
     if name.len() > 120 {
-        return Err((StatusCode::BAD_REQUEST, "restaurant name must be 120 characters or fewer"));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "restaurant name must be 120 characters or fewer",
+        ));
     }
 
     let base_slug = slugify(name);
     if base_slug.len() < 3 {
-        return Err((StatusCode::BAD_REQUEST, "restaurant name must produce a valid URL slug (try adding more letters)"));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "restaurant name must produce a valid URL slug (try adding more letters)",
+        ));
     }
     let slug = unique_slug(&state.pool, &base_slug).await?;
 
@@ -121,7 +128,12 @@ pub async fn create(
     .bind(&slug)
     .fetch_one(&state.pool)
     .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to create restaurant"))?;
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to create restaurant",
+        )
+    })?;
 
     Ok(Redirect::to(&format!("/restaurants/{restaurant_id}")))
 }
@@ -147,9 +159,15 @@ pub async fn show(
     };
 
     let token = new_csrf_token(&session).await?;
-    let html = RestaurantShowPage { id, name, slug, is_published, token }
-        .render()
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "template error"))?;
+    let html = RestaurantShowPage {
+        id,
+        name,
+        slug,
+        is_published,
+        token,
+    }
+    .render()
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "template error"))?;
     Ok(Html(html))
 }
 
@@ -170,7 +188,12 @@ pub async fn publish_toggle(
     .bind(user_id)
     .execute(&state.pool)
     .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to toggle publish status"))?;
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to toggle publish status",
+        )
+    })?;
 
     if rows.rows_affected() == 0 {
         return Err((StatusCode::NOT_FOUND, "restaurant not found"));

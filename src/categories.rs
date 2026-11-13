@@ -1,4 +1,4 @@
-use crate::auth::{new_csrf_token, verify_csrf_token, AppState};
+use crate::auth::{AppState, new_csrf_token, verify_csrf_token};
 use crate::restaurants::require_auth;
 use askama::Template;
 use axum::extract::{Form, Path, State};
@@ -56,8 +56,7 @@ pub async fn list(
     Path(restaurant_id): Path<i64>,
 ) -> Result<Html<String>, (StatusCode, &'static str)> {
     let user_id = require_auth(&session).await?;
-    let restaurant_name =
-        require_restaurant_owner(&state.pool, restaurant_id, user_id).await?;
+    let restaurant_name = require_restaurant_owner(&state.pool, restaurant_id, user_id).await?;
 
     let categories: Vec<(i64, String)> = sqlx::query_as(
         "SELECT id, name FROM menu_categories WHERE restaurant_id = $1 ORDER BY sort_order, id",
@@ -71,9 +70,13 @@ pub async fn list(
         .into_iter()
         .map(|(id, name)| CategoryRow { id, name })
         .collect();
-    let html = CategoryListPage { restaurant_id, restaurant_name, categories: categories_view }
-        .render()
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "template error"))?;
+    let html = CategoryListPage {
+        restaurant_id,
+        restaurant_name,
+        categories: categories_view,
+    }
+    .render()
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "template error"))?;
     Ok(Html(html))
 }
 
@@ -83,12 +86,15 @@ pub async fn new_form(
     Path(restaurant_id): Path<i64>,
 ) -> Result<Html<String>, (StatusCode, &'static str)> {
     let user_id = require_auth(&session).await?;
-    let restaurant_name =
-        require_restaurant_owner(&state.pool, restaurant_id, user_id).await?;
+    let restaurant_name = require_restaurant_owner(&state.pool, restaurant_id, user_id).await?;
     let token = new_csrf_token(&session).await?;
-    let html = CategoryNewPage { restaurant_id, restaurant_name, token }
-        .render()
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "template error"))?;
+    let html = CategoryNewPage {
+        restaurant_id,
+        restaurant_name,
+        token,
+    }
+    .render()
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "template error"))?;
     Ok(Html(html))
 }
 
@@ -107,7 +113,10 @@ pub async fn create(
         return Err((StatusCode::BAD_REQUEST, "category name must not be empty"));
     }
     if name.len() > 120 {
-        return Err((StatusCode::BAD_REQUEST, "category name must be 120 characters or fewer"));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "category name must be 120 characters or fewer",
+        ));
     }
 
     sqlx::query(
@@ -120,7 +129,14 @@ pub async fn create(
     .bind(name)
     .execute(&state.pool)
     .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to create category"))?;
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to create category",
+        )
+    })?;
 
-    Ok(Redirect::to(&format!("/restaurants/{restaurant_id}/categories")))
+    Ok(Redirect::to(&format!(
+        "/restaurants/{restaurant_id}/categories"
+    )))
 }
