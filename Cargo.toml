@@ -19,3 +19,6 @@ url = "2"
 uuid = { version = "1", features = ["v4"] }
 dashmap = "6"
 time = "0.3"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

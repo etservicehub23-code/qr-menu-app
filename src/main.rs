@@ -4,6 +4,8 @@ mod items;
 mod menu;
 mod qr;
 mod restaurants;
+#[cfg(test)]
+mod tests;
 mod uploads;
 
 use auth::AppState;
