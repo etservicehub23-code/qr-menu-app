@@ -20,6 +20,7 @@ struct RestaurantShowPage {
     slug: String,
     is_published: bool,
     token: String,
+    scan_count: i64,
 }
 
 #[derive(Deserialize)]
@@ -158,6 +159,13 @@ pub async fn show(
         return Err((StatusCode::NOT_FOUND, "restaurant not found"));
     };
 
+    let scan_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM menu_scans WHERE restaurant_id = $1")
+            .bind(id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap_or(0);
+
     let token = new_csrf_token(&session).await?;
     let html = RestaurantShowPage {
         id,
@@ -165,6 +173,7 @@ pub async fn show(
         slug,
         is_published,
         token,
+        scan_count,
     }
     .render()
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "template error"))?;

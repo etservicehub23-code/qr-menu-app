@@ -38,6 +38,12 @@ pub async fn public_menu(
         return Err((StatusCode::NOT_FOUND, "menu not found"));
     };
 
+    // best-effort scan record — do not fail the page load on insert error
+    let _ = sqlx::query("INSERT INTO menu_scans (restaurant_id) VALUES ($1)")
+        .bind(restaurant_id)
+        .execute(&state.pool)
+        .await;
+
     type MenuRow = (i64, String, String, Option<String>, i32, Option<String>);
     let rows: Vec<MenuRow> = sqlx::query_as(
         "SELECT mc.id, mc.name, mi.name, mi.description, mi.price_cents, mi.photo_url

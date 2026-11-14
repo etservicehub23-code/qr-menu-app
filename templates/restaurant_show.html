@@ -9,6 +9,7 @@
 <button type="submit">{% if is_published %}Unpublish{% else %}Publish{% endif %}</button>
 </form>
 <p><a href="/restaurants/{{ id }}/categories">Manage categories</a></p>
+<p>Total QR scans: <strong>{{ scan_count }}</strong></p>
 <p><a href="/restaurants/{{ id }}/qr">Download QR code (SVG)</a></p>
 <p><a href="/">Back</a></p>
 </body>
