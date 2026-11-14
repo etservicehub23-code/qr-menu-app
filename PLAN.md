@@ -1561,3 +1561,49 @@ one rather than deferring that migration.
     assert at minimum that (a) GET /m/{slug} returns 404 for unpublished restaurants and
     (b) GET /m/{slug} returns 200 for published restaurants. Keeps the twice-daily
     cadence productive and addresses a consistently flagged oracle concern.
+
+- 2026-11-14 (evening): Integration tests for public menu endpoint. Added
+  `src/tests.rs` with three `#[sqlx::test]`-based integration tests covering
+  `GET /m/{slug}`: (a) nonexistent slug → 404, (b) existing unpublished
+  restaurant → 404, (c) published restaurant → 200. `menu_test_app()` builds
+  a minimal Axum router with just the `/m/{slug}` route, backed by the
+  `sqlx::test`-provided Postgres pool (migrations applied automatically via
+  `migrations = "./migrations"`) and an `object_store::memory::InMemory` stub
+  for S3 (not needed for the public menu path). Tests use
+  `tower::ServiceExt::oneshot()` without a live server. Added
+  `[dev-dependencies] tower = { version = "0.5", features = ["util"] }` to
+  Cargo.toml. Added `#[cfg(test)] mod tests;` to `src/main.rs`. Updated
+  `.github/workflows/ci.yml` with a `postgres:16-alpine` service (password:
+  testpw, superuser, port 5432) and `DATABASE_URL` env var so `sqlx::test`
+  can create/drop temporary databases in CI. Commits `a4dafb6` (tests + CI)
+  and `c7f3a9b` (Cargo.lock fix for the new dev-dep). `cargo build`, `cargo
+  test --no-run`, `cargo clippy --locked -D warnings`, `cargo fmt --check`
+  all clean.
+  - Oracle verdict: **flagged / do not proceed to new work yet** (re-submitted
+    after finding lockfile issue). "Do not proceed to new work yet: the design
+    is sound, but commit a4dafb6 omits a required lockfile update." Specifically:
+    1. **Cargo.lock not committed (blocker)**: Added `tower` as a dev-dep but
+       didn't include the updated `Cargo.lock`. CI uses `--locked` on both
+       `cargo build` and `cargo test`, which would fail if the lockfile is
+       out of sync. Fixed in commit `c7f3a9b`. Oracle confirmed the CI Postgres
+       configuration is correct: "The official PostgreSQL image creates
+       `postgres` as a superuser, so SQLx has sufficient database creation
+       privileges without an additional CREATEDB grant."
+    Non-blocking notes (oracle):
+    1. Tests assert only HTTP status codes, not response body content — a
+       published restaurant 200 response could be an empty page; oracle suggests
+       adding at least one body-content assertion in a future test step.
+    2. After green CI, proceed to new work; track stronger content assertions
+       separately.
+  - **The Cargo.lock blocker is now resolved (commit c7f3a9b).** The oracle's
+    concern was about the lockfile only; the test design was approved as sound.
+    After CI passes for c7f3a9b, the next run may proceed to new work.
+  - Next run: proceed to **new work** once CI is green. Options per the
+    remaining open items:
+    (a) Add a body-content assertion to at least one test (oracle-suggested,
+        small follow-up — could add to the existing 200 test to assert
+        restaurant name appears in the response body).
+    (b) `S3_PUBLIC_BASE_URL` env var separate from `S3_ENDPOINT` to fix the
+        shared-hostname constraint for production photo URL construction.
+    Recommendation: **(a) body assertion** first (tiny, keeps CI meaningful),
+    then **(b) S3_PUBLIC_BASE_URL** as the next distinct increment.
