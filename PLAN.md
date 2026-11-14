@@ -1525,3 +1525,39 @@ one rather than deferring that migration.
     self-contained Milestone 6 feature increment (one migration + one SQL INSERT on the
     public menu handler + one count display in the owner dashboard). Keeps the
     twice-daily cadence productive without touching deployment plumbing.
+
+- 2026-11-14: Scan-count stub — Milestone 6 analytics open item. Added migration
+  `20261114000000_create_menu_scans.sql` (menu_scans table: BIGINT IDENTITY PK,
+  restaurant_id BIGINT FK ON DELETE CASCADE, scanned_at TIMESTAMPTZ DEFAULT now(),
+  index on restaurant_id). In `src/menu.rs`: best-effort INSERT into menu_scans on
+  each GET /m/{slug} hit (result discarded with `let _ = ...`; page load never fails
+  if insert errors). In `src/restaurants.rs`: show() now queries COUNT(*) from
+  menu_scans for the owner's restaurant (restaurant_id already verified against
+  authenticated owner; .unwrap_or(0) so DB errors default to 0 not 500); scan_count
+  passed into RestaurantShowPage. In `templates/restaurant_show.html`: "Total QR
+  scans: {{ scan_count }}" added (scan_count is i64, Askama auto-escapes, injection-safe
+  by type). `cargo build` clean. Commit `b7fa0db`, pushed to main.
+  - Oracle verdict: **approved / next run can proceed to new work** (confidence high).
+    "Acceptable as a best-effort stub; the next run can proceed to new work. The actual
+    migration is valid for PostgreSQL 16: identity primary key, matching BIGINT foreign
+    key, cascade deletion, timestamp default, and appropriate restaurant index. The
+    parameterized INSERT introduces no SQL injection issue, and the COUNT is tenant-
+    isolated because show() verifies the same restaurant ID against the authenticated
+    owner before executing it. PostgreSQL COUNT(*) returns bigint, matching i64;
+    rendering that integer introduces no XSS issue. No blocking migration or
+    authorization defect was found." Non-blocking notes:
+    1. INSERT in the hot request path adds latency on every public menu page load,
+       especially under traffic spikes — buffered/async analytics would be better for
+       production but is explicitly deferred to a future step.
+    2. Planning inconsistency: PLAN.md originally required sampled/buffered analytics;
+       the later scope entry explicitly approved the INSERT-based stub. Buffering remains
+       unfinished.
+    3. Table will grow without bound unless pruned or time-partitioned (deferred).
+    4. COUNT(*) across a large menu_scans table will slow at scale; a separate counters
+       table or materialized view would scale better (deferred).
+  - Next run: proceed to **integration tests** — add at least one integration test so
+    CI's `cargo test` becomes meaningful. Suggested first test: spin up a test Postgres
+    via `sqlx::test` (or a manually managed pool in a test), run the migrations, and
+    assert at minimum that (a) GET /m/{slug} returns 404 for unpublished restaurants and
+    (b) GET /m/{slug} returns 200 for published restaurants. Keeps the twice-daily
+    cadence productive and addresses a consistently flagged oracle concern.
