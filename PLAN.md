@@ -1607,3 +1607,28 @@ one rather than deferring that migration.
         shared-hostname constraint for production photo URL construction.
     Recommendation: **(a) body assertion** first (tiny, keeps CI meaningful),
     then **(b) S3_PUBLIC_BASE_URL** as the next distinct increment.
+
+- 2026-11-15 (morning): Body-content assertion added to 200 test. In
+  `src/tests.rs`: extended `menu_published_restaurant_returns_200` to collect
+  the response body via `axum::body::to_bytes(resp.into_body(), 1024*1024)`,
+  decode as UTF-8, and assert `body_str.contains("Open Place")` — confirming
+  the restaurant name appears in the rendered HTML. `cargo build` and
+  `cargo fmt --check` clean (test module only runs under `cargo test` with a
+  live Postgres). Commit `95e786a`, pushed to main. Oracle budget 12/24.
+  - Oracle verdict: **approved on code review / next run may proceed to new
+    work** (confidence high). "`to_bytes` with 1 MiB limit correctly collects
+    the oneshot response body. `std::str::from_utf8` + `contains('Open Place')`
+    is appropriate for the ASCII fixture and `Html<String>` response. No
+    correctness or safety defect found." Non-blocking notes:
+    1. `cargo build` excludes the `#[cfg(test)]` module; actual test execution
+       requires `cargo test` with a live Postgres (CI will validate this).
+    2. Assertion matches both `<title>` and `<h1>`; a tighter
+       `contains("<h1>Open Place</h1>")` would isolate the visible heading —
+       not required, deferred.
+    3. HTML escaping and menu-item rendering are not tested by this fixture —
+       separate concerns, not blockers.
+  - Next run: proceed to **S3_PUBLIC_BASE_URL env var** — separate
+    `S3_PUBLIC_BASE_URL` from `S3_ENDPOINT` so the public photo URL base can
+    differ from the internal S3 endpoint (removes shared-hostname constraint
+    for production deployments). Small, contained code change in `AppState`,
+    config loading, and photo URL construction.
