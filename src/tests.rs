@@ -79,7 +79,7 @@ async fn menu_unpublished_restaurant_returns_404(pool: PgPool) {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
-/// A published restaurant is visible to the public — 200.
+/// A published restaurant is visible to the public — 200 with restaurant name in body.
 #[sqlx::test(migrations = "./migrations")]
 async fn menu_published_restaurant_returns_200(pool: PgPool) {
     sqlx::query("INSERT INTO users (email, password_hash) VALUES ('owner2@test.local', 'x')")
@@ -111,4 +111,12 @@ async fn menu_published_restaurant_returns_200(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let body_str = std::str::from_utf8(&body_bytes).unwrap();
+    assert!(
+        body_str.contains("Open Place"),
+        "response body should contain the restaurant name"
+    );
 }
