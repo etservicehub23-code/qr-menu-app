@@ -1632,3 +1632,41 @@ one rather than deferring that migration.
     differ from the internal S3 endpoint (removes shared-hostname constraint
     for production deployments). Small, contained code change in `AppState`,
     config loading, and photo URL construction.
+
+- 2026-11-17: S3_PUBLIC_BASE_URL env var — four commits across this run:
+  (972add8) Initial feature: `S3_PUBLIC_BASE_URL` optional env var added to
+  `EnvConfig`; when set, used directly as `s3_public_base`; when unset,
+  falls back to `{S3_ENDPOINT}/{BUCKET}` (backward-compatible). `.env.example`
+  updated with documentation.
+  (4820640) Added `validate_s3_public_base_url()` to reject empty/invalid values:
+  parses URL, requires http/https + non-empty host, rejects credentials/query/fragment.
+  (f12cfdd) Oracle-flagged medium issues fixed: (a) `syntax_violation_callback` added
+  to reject parser-repaired inputs (`https:///bucket`, hostname with newlines);
+  `RefCell` used for interior mutability (callback is Fn not FnMut); (b) raw URL
+  removed from credential/query/fragment error messages to prevent secret exposure;
+  (c) `VarError::NotUnicode` handled explicitly (pushes startup error).
+  (654e461) Low fix: removed scheme text from unsupported-scheme error message
+  (malformed input can place a secret in the scheme field). `cargo build`,
+  `cargo clippy --locked -D warnings`, `cargo fmt --check` all clean.
+  - Oracle verdict (commit f12cfdd): **conditionally approved / proceed to new work**
+    (confidence high). "Commit f12cfdd fixes the reported S3 validation defects...
+    Proceed to new work after adding focused regression coverage; no further redesign
+    is needed for these defects." Non-blocking notes:
+    1. `validate_base_url()` (for BASE_URL) still echoes raw value — sibling issue,
+       deferred to a future security pass.
+    2. No dedicated validator unit tests yet — oracle recommended table-driven tests
+       covering the rejection cases and valid canonical outputs.
+    3. Existing photos retain old URL prefix if the base URL changes (documented
+       design limitation — not a code defect, affects cleanup only).
+    4. Contract note: callback rejects parser-reported syntax violations; legitimate
+       canonicalization (dot segments, abbreviated IPv4) is still accepted and
+       normalized — this is correct behavior per the crate's documented pattern.
+  - Next run: proceed to **validator unit tests** — add table-driven tests for
+    `validate_s3_public_base_url()` in `src/tests.rs` covering: empty string rejected,
+    syntax violations rejected (https:///bucket, hostname with newline), credentials
+    rejected with no secret in error, query/fragment rejected, http+https valid,
+    path preserved, trailing slash stripped, non-HTTP scheme rejected, NotUnicode
+    handled (via startup integration). This satisfies the oracle's "focused regression
+    coverage" requirement before treating S3_PUBLIC_BASE_URL as fully locked. After
+    tests pass, the next distinct increment can address `validate_base_url()` credential
+    echoing or move to remaining open items.
