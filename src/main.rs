@@ -343,6 +343,13 @@ mod validator_tests {
                 "http://192.168.1.1:9000/bucket",
                 "http://192.168.1.1:9000/bucket",
             ),
+            // Hostname case-normalised + default HTTPS port stripped by url crate.
+            // A "just trim trailing slash" implementation would return the raw input
+            // unchanged, so this row catches that regression.
+            (
+                "https://CDN.Example.COM:443/photos/",
+                "https://cdn.example.com/photos",
+            ),
         ];
         for (input, expected) in cases {
             let result = validate_s3_public_base_url(input);
@@ -420,23 +427,83 @@ mod validator_tests {
     }
 
     #[test]
-    fn fragment_rejected() {
-        assert!(validate_s3_public_base_url("https://cdn.example.com/bucket#section").is_err());
+    fn fragment_rejected_no_secret_in_error() {
+        let secret = "FRAGMENTSECRET";
+        let case = format!("https://cdn.example.com/bucket#{secret}");
+        let result = validate_s3_public_base_url(&case);
+        assert!(result.is_err(), "expected fragment to be rejected");
+        let err = result.unwrap_err();
+        assert!(
+            !err.contains(secret),
+            "fragment error leaked secret: {err:?}"
+        );
+    }
+
+    #[test]
+    fn scheme_error_no_secret_in_error() {
+        // A secret pasted before :// occupies the scheme field — verify no echo.
+        let secret = "SCHEMESECRET";
+        // url crate lowercases the scheme; "schemesecret" is a valid scheme token.
+        let case = format!("{secret}://cdn.example.com/bucket");
+        let result = validate_s3_public_base_url(&case);
+        assert!(
+            result.is_err(),
+            "expected unsupported scheme to be rejected"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            !err.to_lowercase().contains(&secret.to_lowercase()),
+            "scheme error leaked secret: {err:?}"
+        );
+    }
+
+    #[test]
+    fn username_only_credential_rejected_no_secret_in_error() {
+        // username-only: no password, but still a credential that must be rejected.
+        let secret = "USERNAMESECRET";
+        let case = format!("https://{secret}@cdn.example.com/bucket");
+        let result = validate_s3_public_base_url(&case);
+        assert!(
+            result.is_err(),
+            "expected username-only credential to be rejected"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            !err.contains(secret),
+            "credential error leaked username: {err:?}"
+        );
     }
 
     /// Verify that construction + strip_prefix roundtrip recovers the original object key.
     /// This is the invariant uploads.rs and items.rs depend on.
+    /// Also asserts the full stored URL to catch doubled-separator or trailing-slash bugs.
     #[test]
     fn strip_prefix_roundtrip() {
-        let bases = [
-            "http://localhost:9000/my-bucket",
-            "https://cdn.example.com/photos",
-            "https://cdn.example.com",
+        let cases: &[(&str, &str)] = &[
+            (
+                "http://localhost:9000/my-bucket",
+                "http://localhost:9000/my-bucket/menu-items/42/abc123.jpg",
+            ),
+            (
+                "https://cdn.example.com/photos",
+                "https://cdn.example.com/photos/menu-items/42/abc123.jpg",
+            ),
+            (
+                "https://cdn.example.com",
+                "https://cdn.example.com/menu-items/42/abc123.jpg",
+            ),
         ];
         let object_key = "menu-items/42/abc123.jpg";
-        for base_raw in &bases {
+        for (base_raw, expected_stored_url) in cases {
             let canonical = validate_s3_public_base_url(base_raw).unwrap();
             let stored_url = format!("{canonical}/{object_key}");
+            // Assert the complete stored URL first (catches doubled-separator or slash bugs).
+            assert_eq!(
+                stored_url.as_str(),
+                *expected_stored_url,
+                "stored URL mismatch for base {base_raw:?}"
+            );
+            // Then verify strip_prefix recovery.
             let recovered = stored_url
                 .strip_prefix(&format!("{canonical}/"))
                 .unwrap_or_else(|| panic!("strip_prefix failed for base {base_raw:?}"));
