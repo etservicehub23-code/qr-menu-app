@@ -1670,3 +1670,35 @@ one rather than deferring that migration.
     coverage" requirement before treating S3_PUBLIC_BASE_URL as fully locked. After
     tests pass, the next distinct increment can address `validate_base_url()` credential
     echoing or move to remaining open items.
+
+- 2026-11-17 (evening): Validator unit tests (commits e60fcd5, bdc250f, 71d9e06).
+  Initial 8 tests added in `#[cfg(test)] mod validator_tests` in `src/main.rs`
+  (co-located with the function, no visibility change needed). After first oracle review,
+  three weaknesses identified and fixed in bdc250f: (a) canonicalization row added
+  (`https://CDN.Example.COM:443/photos/` → `https://cdn.example.com/photos` — defeats
+  "just trim trailing slash" regression); (b) redaction assertions expanded for
+  fragment, scheme, and username-only credential cases; (c) roundtrip test made
+  non-tautological by asserting complete expected stored URL before strip_prefix.
+  71d9e06 fixed a vacuous sub-case (username-only credential assertion had no secret
+  in input). Final suite: 10 tests, all passing. `cargo build`, `cargo clippy --locked
+  -D warnings`, `cargo fmt --check` clean.
+  - Oracle verdict (commit bdc250f): **approved / proceed to new work after CI**
+    (confidence high). "Approve closing the three specific coverage gaps and
+    proceeding to new work after green CI. The canonicalization row defeats a
+    trim-only implementation; the added tests cover fragment, scheme, and username-only
+    secret leakage; the literal expected URLs make the roundtrip non-tautological.
+    The scheme test is correctly structured." Non-blocking notes:
+    1. Roundtrip duplicates construction/recovery expressions rather than calling
+       production code — changes in uploads.rs/items.rs could escape it (deferred).
+    2. NotUnicode startup integration test not yet written — deferred to a future step.
+    3. With locked url 2.5.8, credentials trigger EmbeddedCredentials via the
+       syntax-violation guard; the later explicit credential guard may be untested
+       in isolation (acceptable for current threat model).
+  - Next run: proceed to **new work**. Options per open items:
+    (a) `validate_base_url()` still echoes raw BASE_URL including credentials
+        in error messages — small security fix, low risk.
+    (b) Add branding fields UI (restaurant logo/accent color) — Milestone 6
+        open item from PLAN.md.
+    Recommendation: **(a) validate_base_url redaction** — small, contained,
+    closes the sibling security concern the oracle has flagged across multiple
+    reviews. One function, same pattern as the S3 fix.
