@@ -400,7 +400,7 @@ mod validator_tests {
         let secret = "TOPSECRETTOKEN";
         let cases = [
             format!("https://user:{secret}@cdn.example.com/bucket"),
-            format!("https://user@cdn.example.com/bucket"),
+            format!("https://{secret}@cdn.example.com/bucket"), // username = secret
         ];
         for case in &cases {
             let result = validate_s3_public_base_url(case);
