@@ -68,6 +68,11 @@ struct EnvConfig {
     base_url: String,
     s3_endpoint: String,
     s3_bucket: String,
+    /// Optional override for the public base URL used in photo image URLs.
+    /// Defaults to `{s3_endpoint}/{s3_bucket}` when not set.
+    /// Set this when the internal S3 endpoint differs from the browser-accessible URL
+    /// (e.g. CDN, reverse proxy, or Docker-internal hostname vs. localhost).
+    s3_public_base_url: Option<String>,
     aws_access_key_id: String,
     aws_secret_access_key: String,
     aws_region: String,
@@ -104,6 +109,8 @@ fn collect_env_config() -> Result<EnvConfig, Vec<String>> {
         .map_err(|_| errors.push("BUCKET must be set".to_string()))
         .ok();
 
+    let s3_public_base_url = std::env::var("S3_PUBLIC_BASE_URL").ok();
+
     let aws_access_key_id = std::env::var("AWS_ACCESS_KEY_ID")
         .map_err(|_| errors.push("AWS_ACCESS_KEY_ID must be set".to_string()))
         .ok();
@@ -123,6 +130,7 @@ fn collect_env_config() -> Result<EnvConfig, Vec<String>> {
         base_url: base_url.unwrap(),
         s3_endpoint: s3_endpoint.unwrap(),
         s3_bucket: s3_bucket.unwrap(),
+        s3_public_base_url,
         aws_access_key_id: aws_access_key_id.unwrap(),
         aws_secret_access_key: aws_secret_access_key.unwrap(),
         aws_region,
@@ -162,12 +170,17 @@ async fn main() {
     // This prevents credentials from being sent over plaintext if config drifts to HTTPS.
     let allow_http = cfg.s3_endpoint.starts_with("http://");
 
-    // Canonical base for constructing public photo URLs: endpoint + bucket.
-    let s3_public_base = format!(
-        "{}/{}",
-        cfg.s3_endpoint.trim_end_matches('/'),
-        cfg.s3_bucket
-    );
+    // Canonical base for constructing public photo URLs.
+    // Use S3_PUBLIC_BASE_URL when set (e.g. CDN or browser-accessible hostname);
+    // fall back to "{s3_endpoint}/{s3_bucket}" for local/default deployments.
+    let s3_public_base = match cfg.s3_public_base_url {
+        Some(explicit) => explicit.trim_end_matches('/').to_string(),
+        None => format!(
+            "{}/{}",
+            cfg.s3_endpoint.trim_end_matches('/'),
+            cfg.s3_bucket
+        ),
+    };
 
     let s3: Arc<dyn object_store::ObjectStore> = Arc::new(
         AmazonS3Builder::new()
