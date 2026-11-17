@@ -92,11 +92,9 @@ fn validate_s3_public_base_url(raw: &str) -> Result<String, String> {
     }
     match parsed.scheme() {
         "http" | "https" => {}
-        s => {
-            // Do not echo raw; scheme is safe to show.
-            return Err(format!(
-                "S3_PUBLIC_BASE_URL scheme must be http or https, got {s:?}"
-            ));
+        _ => {
+            // Do not echo scheme — malformed input could place secrets there.
+            return Err("S3_PUBLIC_BASE_URL scheme must be http or https".to_string());
         }
     }
     if parsed.host().is_none() {
