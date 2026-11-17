@@ -65,53 +65,57 @@ fn validate_base_url(raw: &str) -> Result<String, String> {
 /// Validate S3_PUBLIC_BASE_URL: must be an absolute http/https URL with a non-empty host,
 /// no credentials, no query string, and no fragment. Path is allowed (may include bucket).
 /// Trailing slash is stripped for consistent prefix construction. Empty string is rejected.
+/// Syntax violations (parser-repaired inputs like `https:///bucket`) are rejected.
+/// Error messages never echo the raw value to avoid leaking credentials.
 fn validate_s3_public_base_url(raw: &str) -> Result<String, String> {
     if raw.trim().is_empty() {
         return Err(
             "S3_PUBLIC_BASE_URL must not be empty; leave it unset to use the default".to_string(),
         );
     }
-    let parsed = url::Url::parse(raw)
-        .map_err(|e| format!("S3_PUBLIC_BASE_URL is not a valid URL ({raw:?}): {e}"))?;
+    // Reject parser-repaired inputs (e.g. https:///bucket accepted as host="bucket",
+    // embedded newlines in hostname silently stripped, etc.).
+    // syntax_violation_callback takes Fn (not FnMut), so RefCell for interior mutability.
+    let violations: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+    let parsed = url::Url::options()
+        .syntax_violation_callback(Some(&|v: url::SyntaxViolation| {
+            violations.borrow_mut().push(v.description().to_string());
+        }))
+        .parse(raw)
+        .map_err(|e| format!("S3_PUBLIC_BASE_URL is not a valid URL: {e}"))?;
+    let violations = violations.into_inner();
+    if !violations.is_empty() {
+        return Err(format!(
+            "S3_PUBLIC_BASE_URL contains syntax violations: {}",
+            violations.join(", ")
+        ));
+    }
     match parsed.scheme() {
         "http" | "https" => {}
         s => {
+            // Do not echo raw; scheme is safe to show.
             return Err(format!(
-                "S3_PUBLIC_BASE_URL scheme must be http or https, got {s:?} in {raw:?}"
+                "S3_PUBLIC_BASE_URL scheme must be http or https, got {s:?}"
             ));
         }
     }
     if parsed.host().is_none() {
-        return Err(format!(
-            "S3_PUBLIC_BASE_URL must have a non-empty host, got: {raw:?}"
-        ));
+        return Err("S3_PUBLIC_BASE_URL must have a non-empty host".to_string());
     }
+    // Do not echo raw value in credential/query/fragment errors — the raw string
+    // may contain secrets (password, token in query param).
     if !parsed.username().is_empty() || parsed.password().is_some() {
-        return Err(format!(
-            "S3_PUBLIC_BASE_URL must not contain credentials, got: {raw:?}"
-        ));
+        return Err("S3_PUBLIC_BASE_URL must not contain credentials".to_string());
     }
     if parsed.query().is_some() {
-        return Err(format!(
-            "S3_PUBLIC_BASE_URL must not contain a query string, got: {raw:?}"
-        ));
+        return Err("S3_PUBLIC_BASE_URL must not contain a query string".to_string());
     }
     if parsed.fragment().is_some() {
-        return Err(format!(
-            "S3_PUBLIC_BASE_URL must not contain a fragment, got: {raw:?}"
-        ));
+        return Err("S3_PUBLIC_BASE_URL must not contain a fragment".to_string());
     }
-    // Build canonical form: preserve path, strip trailing slash.
-    let mut result = format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap());
-    if let Some(port) = parsed.port() {
-        result.push(':');
-        result.push_str(&port.to_string());
-    }
-    let path = parsed.path().trim_end_matches('/');
-    if !path.is_empty() {
-        result.push_str(path);
-    }
-    Ok(result)
+    // Use the parser's canonical serialization (trailing slash already stripped by
+    // our empty-host/query/fragment guards). Strip any remaining trailing slash.
+    Ok(parsed.as_str().trim_end_matches('/').to_owned())
 }
 
 struct EnvConfig {
@@ -160,11 +164,16 @@ fn collect_env_config() -> Result<EnvConfig, Vec<String>> {
         .map_err(|_| errors.push("BUCKET must be set".to_string()))
         .ok();
 
-    let s3_public_base_url = std::env::var("S3_PUBLIC_BASE_URL").ok().and_then(|raw| {
-        validate_s3_public_base_url(&raw)
+    let s3_public_base_url = match std::env::var("S3_PUBLIC_BASE_URL") {
+        Ok(raw) => validate_s3_public_base_url(&raw)
             .map_err(|e| errors.push(e))
-            .ok()
-    });
+            .ok(),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            errors.push("S3_PUBLIC_BASE_URL contains invalid Unicode".to_string());
+            None
+        }
+    };
 
     let aws_access_key_id = std::env::var("AWS_ACCESS_KEY_ID")
         .map_err(|_| errors.push("AWS_ACCESS_KEY_ID must be set".to_string()))
