@@ -62,6 +62,57 @@ fn validate_base_url(raw: &str) -> Result<String, String> {
     }
     Ok(origin)
 }
+/// Validate S3_PUBLIC_BASE_URL: must be an absolute http/https URL with a non-empty host,
+/// no credentials, no query string, and no fragment. Path is allowed (may include bucket).
+/// Trailing slash is stripped for consistent prefix construction. Empty string is rejected.
+fn validate_s3_public_base_url(raw: &str) -> Result<String, String> {
+    if raw.trim().is_empty() {
+        return Err(
+            "S3_PUBLIC_BASE_URL must not be empty; leave it unset to use the default".to_string(),
+        );
+    }
+    let parsed = url::Url::parse(raw)
+        .map_err(|e| format!("S3_PUBLIC_BASE_URL is not a valid URL ({raw:?}): {e}"))?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        s => {
+            return Err(format!(
+                "S3_PUBLIC_BASE_URL scheme must be http or https, got {s:?} in {raw:?}"
+            ));
+        }
+    }
+    if parsed.host().is_none() {
+        return Err(format!(
+            "S3_PUBLIC_BASE_URL must have a non-empty host, got: {raw:?}"
+        ));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(format!(
+            "S3_PUBLIC_BASE_URL must not contain credentials, got: {raw:?}"
+        ));
+    }
+    if parsed.query().is_some() {
+        return Err(format!(
+            "S3_PUBLIC_BASE_URL must not contain a query string, got: {raw:?}"
+        ));
+    }
+    if parsed.fragment().is_some() {
+        return Err(format!(
+            "S3_PUBLIC_BASE_URL must not contain a fragment, got: {raw:?}"
+        ));
+    }
+    // Build canonical form: preserve path, strip trailing slash.
+    let mut result = format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap());
+    if let Some(port) = parsed.port() {
+        result.push(':');
+        result.push_str(&port.to_string());
+    }
+    let path = parsed.path().trim_end_matches('/');
+    if !path.is_empty() {
+        result.push_str(path);
+    }
+    Ok(result)
+}
 
 struct EnvConfig {
     database_url: String,
@@ -109,7 +160,11 @@ fn collect_env_config() -> Result<EnvConfig, Vec<String>> {
         .map_err(|_| errors.push("BUCKET must be set".to_string()))
         .ok();
 
-    let s3_public_base_url = std::env::var("S3_PUBLIC_BASE_URL").ok();
+    let s3_public_base_url = std::env::var("S3_PUBLIC_BASE_URL").ok().and_then(|raw| {
+        validate_s3_public_base_url(&raw)
+            .map_err(|e| errors.push(e))
+            .ok()
+    });
 
     let aws_access_key_id = std::env::var("AWS_ACCESS_KEY_ID")
         .map_err(|_| errors.push("AWS_ACCESS_KEY_ID must be set".to_string()))
