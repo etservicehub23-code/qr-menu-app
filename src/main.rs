@@ -311,3 +311,136 @@ async fn main() {
     .await
     .expect("server error");
 }
+
+#[cfg(test)]
+mod validator_tests {
+    use super::validate_s3_public_base_url;
+
+    /// Table-driven tests covering rejection and valid canonical output.
+    #[test]
+    fn valid_inputs_produce_canonical_output() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "http://localhost:9000/bucket",
+                "http://localhost:9000/bucket",
+            ),
+            (
+                "https://cdn.example.com/photos",
+                "https://cdn.example.com/photos",
+            ),
+            // Trailing slash stripped.
+            (
+                "http://localhost:9000/bucket/prefix/",
+                "http://localhost:9000/bucket/prefix",
+            ),
+            // Root path with trailing slash stripped.
+            ("https://cdn.example.com/", "https://cdn.example.com"),
+            ("https://cdn.example.com", "https://cdn.example.com"),
+            // IPv6 host.
+            ("http://[::1]:9000/bucket", "http://[::1]:9000/bucket"),
+            // Non-default port.
+            (
+                "http://192.168.1.1:9000/bucket",
+                "http://192.168.1.1:9000/bucket",
+            ),
+        ];
+        for (input, expected) in cases {
+            let result = validate_s3_public_base_url(input);
+            assert!(
+                result.is_ok(),
+                "expected Ok for {input:?}, got Err: {:?}",
+                result.err()
+            );
+            assert_eq!(
+                result.unwrap().as_str(),
+                *expected,
+                "canonical mismatch for {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_and_whitespace_rejected() {
+        for input in ["", "   ", "\t"] {
+            assert!(
+                validate_s3_public_base_url(input).is_err(),
+                "expected Err for {input:?}"
+            );
+        }
+    }
+
+    /// https:///bucket triggers a syntax violation (ExpectedDoubleSlash) in the url crate.
+    #[test]
+    fn syntax_violation_rejected() {
+        // Empty authority after double slash.
+        assert!(validate_s3_public_base_url("https:///bucket").is_err());
+        // Embedded newline in hostname triggers TabOrNewlineIgnored violation.
+        assert!(validate_s3_public_base_url("https://exam\nple.com/bucket").is_err());
+    }
+
+    #[test]
+    fn bad_scheme_rejected() {
+        for input in ["ftp://example.com/bucket", "file:///etc/passwd"] {
+            assert!(
+                validate_s3_public_base_url(input).is_err(),
+                "expected Err for {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn credentials_rejected_no_secret_in_error() {
+        let secret = "TOPSECRETTOKEN";
+        let cases = [
+            format!("https://user:{secret}@cdn.example.com/bucket"),
+            format!("https://user@cdn.example.com/bucket"),
+        ];
+        for case in &cases {
+            let result = validate_s3_public_base_url(case);
+            assert!(result.is_err(), "expected Err for {case:?}");
+            let err = result.unwrap_err();
+            assert!(
+                !err.contains(secret),
+                "error message for credentials case leaked secret: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn query_string_rejected_no_secret_in_error() {
+        let secret = "TOPSECRETTOKEN";
+        let case = format!("https://cdn.example.com/bucket?token={secret}");
+        let result = validate_s3_public_base_url(&case);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            !err.contains(secret),
+            "error message for query case leaked secret: {err:?}"
+        );
+    }
+
+    #[test]
+    fn fragment_rejected() {
+        assert!(validate_s3_public_base_url("https://cdn.example.com/bucket#section").is_err());
+    }
+
+    /// Verify that construction + strip_prefix roundtrip recovers the original object key.
+    /// This is the invariant uploads.rs and items.rs depend on.
+    #[test]
+    fn strip_prefix_roundtrip() {
+        let bases = [
+            "http://localhost:9000/my-bucket",
+            "https://cdn.example.com/photos",
+            "https://cdn.example.com",
+        ];
+        let object_key = "menu-items/42/abc123.jpg";
+        for base_raw in &bases {
+            let canonical = validate_s3_public_base_url(base_raw).unwrap();
+            let stored_url = format!("{canonical}/{object_key}");
+            let recovered = stored_url
+                .strip_prefix(&format!("{canonical}/"))
+                .unwrap_or_else(|| panic!("strip_prefix failed for base {base_raw:?}"));
+            assert_eq!(recovered, object_key, "roundtrip mismatch for {base_raw:?}");
+        }
+    }
+}
