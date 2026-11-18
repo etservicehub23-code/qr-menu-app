@@ -270,6 +270,10 @@ async fn main() {
             "/restaurants/{id}/publish",
             post(restaurants::publish_toggle),
         )
+        .route(
+            "/restaurants/{id}/branding",
+            post(restaurants::update_branding),
+        )
         .route("/restaurants/{id}/categories", get(categories::list))
         .route(
             "/restaurants/{id}/categories/new",

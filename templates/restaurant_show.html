@@ -11,6 +11,27 @@
 <p><a href="/restaurants/{{ id }}/categories">Manage categories</a></p>
 <p>Total QR scans: <strong>{{ scan_count }}</strong></p>
 <p><a href="/restaurants/{{ id }}/qr">Download QR code (SVG)</a></p>
+
+<hr>
+<h2>Branding</h2>
+{% match accent_color %}
+{% when Some with (color) %}<p>Accent color: <span style="display:inline-block;width:1em;height:1em;background:{{ color }};border:1px solid #ccc;vertical-align:middle"></span> <code>{{ color }}</code></p>{% when None %}<p>Accent color: <em>none</em></p>
+{% endmatch %}
+{% match logo_url %}
+{% when Some with (url) %}<p>Logo: <img src="{{ url }}" alt="Restaurant logo" style="max-height:48px;vertical-align:middle"></p>{% when None %}<p>Logo: <em>none</em></p>
+{% endmatch %}
+<form method="post" action="/restaurants/{{ id }}/branding">
+<input type="hidden" name="authenticity_token" value="{{ branding_token }}">
+<p>
+  <label>Accent color (hex, e.g. #3a7bd5): <input type="text" name="accent_color" value="{% match accent_color %}{% when Some with (c) %}{{ c }}{% when None %}{% endmatch %}" placeholder="#rrggbb" maxlength="7" pattern="#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?"></label>
+</p>
+<p>
+  <label>Logo URL (http/https): <input type="url" name="logo_url" value="{% match logo_url %}{% when Some with (u) %}{{ u }}{% when None %}{% endmatch %}" placeholder="https://..." maxlength="2048" style="width:30em"></label>
+</p>
+<button type="submit">Save branding</button>
+</form>
+
+<hr>
 <p><a href="/">Back</a></p>
 </body>
 </html>

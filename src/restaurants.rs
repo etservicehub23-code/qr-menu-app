@@ -20,7 +20,10 @@ struct RestaurantShowPage {
     slug: String,
     is_published: bool,
     token: String,
+    branding_token: String,
     scan_count: i64,
+    accent_color: Option<String>,
+    logo_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -32,6 +35,13 @@ pub struct CreateRestaurantForm {
 #[derive(Deserialize)]
 pub struct TokenForm {
     authenticity_token: String,
+}
+
+#[derive(Deserialize)]
+pub struct BrandingForm {
+    authenticity_token: String,
+    accent_color: String,
+    logo_url: String,
 }
 
 /// Converts a restaurant name to a URL-safe slug:
@@ -146,8 +156,10 @@ pub async fn show(
 ) -> Result<Html<String>, (StatusCode, &'static str)> {
     let user_id = require_auth(&session).await?;
 
-    let row: Option<(String, String, bool)> = sqlx::query_as(
-        "SELECT name, slug, is_published FROM restaurants WHERE id = $1 AND owner_id = $2",
+    type ShowRow = (String, String, bool, Option<String>, Option<String>);
+    let row: Option<ShowRow> = sqlx::query_as(
+        "SELECT name, slug, is_published, accent_color, logo_url
+         FROM restaurants WHERE id = $1 AND owner_id = $2",
     )
     .bind(id)
     .bind(user_id)
@@ -155,7 +167,7 @@ pub async fn show(
     .await
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
 
-    let Some((name, slug, is_published)) = row else {
+    let Some((name, slug, is_published, accent_color, logo_url)) = row else {
         return Err((StatusCode::NOT_FOUND, "restaurant not found"));
     };
 
@@ -167,13 +179,17 @@ pub async fn show(
             .unwrap_or(0);
 
     let token = new_csrf_token(&session).await?;
+    let branding_token = new_csrf_token(&session).await?;
     let html = RestaurantShowPage {
         id,
         name,
         slug,
         is_published,
         token,
+        branding_token,
         scan_count,
+        accent_color,
+        logo_url,
     }
     .render()
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "template error"))?;
@@ -209,6 +225,82 @@ pub async fn publish_toggle(
     }
 
     Ok(Redirect::to(&format!("/restaurants/{id}")))
+}
+
+/// Updates accent_color and logo_url for the authenticated owner's restaurant.
+/// accent_color must be empty (clear) or a hex color (#RGB or #RRGGBB).
+/// logo_url must be empty (clear) or an absolute http/https URL.
+pub async fn update_branding(
+    State(state): State<AppState>,
+    session: Session,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    Form(form): Form<BrandingForm>,
+) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
+    let user_id = require_auth(&session).await?;
+    verify_csrf_token(&session, &form.authenticity_token).await?;
+
+    let accent = form.accent_color.trim();
+    let logo = form.logo_url.trim();
+
+    // Validate accent_color: must be empty or #RGB / #RRGGBB hex.
+    let accent_color: Option<&str> = if accent.is_empty() {
+        None
+    } else if is_valid_hex_color(accent) {
+        Some(accent)
+    } else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "accent color must be a hex color (#RGB or #RRGGBB)",
+        ));
+    };
+
+    // Validate logo_url: must be empty or an absolute http/https URL.
+    let logo_url: Option<&str> = if logo.is_empty() {
+        None
+    } else if logo.starts_with("http://") || logo.starts_with("https://") {
+        if logo.len() > 2048 {
+            return Err((StatusCode::BAD_REQUEST, "logo URL is too long"));
+        }
+        Some(logo)
+    } else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "logo URL must start with http:// or https://",
+        ));
+    };
+
+    let rows = sqlx::query(
+        "UPDATE restaurants SET accent_color = $1, logo_url = $2
+         WHERE id = $3 AND owner_id = $4",
+    )
+    .bind(accent_color)
+    .bind(logo_url)
+    .bind(id)
+    .bind(user_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to update branding",
+        )
+    })?;
+
+    if rows.rows_affected() == 0 {
+        return Err((StatusCode::NOT_FOUND, "restaurant not found"));
+    }
+
+    Ok(Redirect::to(&format!("/restaurants/{id}")))
+}
+
+/// Returns true if s is a valid CSS hex color: #RGB or #RRGGBB (case-insensitive).
+fn is_valid_hex_color(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    match bytes.len() {
+        4 => bytes[0] == b'#' && bytes[1..].iter().all(|b| b.is_ascii_hexdigit()),
+        7 => bytes[0] == b'#' && bytes[1..].iter().all(|b| b.is_ascii_hexdigit()),
+        _ => false,
+    }
 }
 
 /// Extracts the authenticated user_id from the session, or returns 401.
