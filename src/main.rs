@@ -27,33 +27,24 @@ async fn health() -> &'static str {
 }
 
 fn validate_base_url(raw: &str) -> Result<String, String> {
-    let parsed =
-        url::Url::parse(raw).map_err(|e| format!("BASE_URL is not a valid URL ({raw:?}): {e}"))?;
+    let parsed = url::Url::parse(raw).map_err(|e| format!("BASE_URL is not a valid URL: {e}"))?;
     match parsed.scheme() {
         "http" | "https" => {}
-        s => {
-            return Err(format!(
-                "BASE_URL scheme must be http or https, got {s:?} in {raw:?}"
-            ));
+        _ => {
+            return Err("BASE_URL scheme must be http or https".to_string());
         }
     }
     if parsed.host().is_none() {
-        return Err(format!("BASE_URL must have a non-empty host, got: {raw:?}"));
+        return Err("BASE_URL must have a non-empty host".to_string());
     }
     if !parsed.username().is_empty() || parsed.password().is_some() {
-        return Err(format!(
-            "BASE_URL must not contain credentials, got: {raw:?}"
-        ));
+        return Err("BASE_URL must not contain credentials".to_string());
     }
     if parsed.query().is_some() {
-        return Err(format!(
-            "BASE_URL must not contain a query string, got: {raw:?}"
-        ));
+        return Err("BASE_URL must not contain a query string".to_string());
     }
     if parsed.fragment().is_some() {
-        return Err(format!(
-            "BASE_URL must not contain a fragment, got: {raw:?}"
-        ));
+        return Err("BASE_URL must not contain a fragment".to_string());
     }
     let mut origin = format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap());
     if let Some(port) = parsed.port() {
