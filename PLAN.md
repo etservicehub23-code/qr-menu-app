@@ -1702,3 +1702,28 @@ one rather than deferring that migration.
     Recommendation: **(a) validate_base_url redaction** — small, contained,
     closes the sibling security concern the oracle has flagged across multiple
     reviews. One function, same pattern as the S3 fix.
+
+- 2026-11-18: validate_base_url credential redaction (commit d7949dc). Removed all
+  six {raw:?} interpolations from validate_base_url() error branches so that
+  credentials embedded in a misconfigured BASE_URL are never echoed to startup logs.
+  Pattern now mirrors the already-approved validate_s3_public_base_url(). cargo build,
+  cargo clippy --locked -D warnings, and cargo fmt --check all clean.
+  - Oracle verdict: **approved / branding fields UI unblocked** (confidence high).
+    "Yes—the diff resolves credential echoing within validate_base_url. All six error
+    paths avoid raw input; the retained {e} is safe because the locked url 2.5.8 parser
+    formats errors using fixed descriptions without input values. The function performs
+    no logging or state mutation, and success returns only scheme, host, and optional
+    port after rejecting credentials, queries, and fragments. Branding fields UI is
+    unblocked by this concern." Non-blocking notes:
+    1. Scope limitation: application-wide confidentiality depends on callers (which
+       were excluded from scope); does not change approval of this function.
+    2. No regression test preventing future reintroduction of input interpolation —
+       oracle recommended adding one table-driven test with credential markers (non-blocking).
+    3. Best alternative noted: constant parse-error message would remove parser-
+       dependency entirely, but url 2.5.8 is already safe (not required).
+  - Next run: proceed to **branding fields UI** (Milestone 6 open item). Add restaurant
+    logo/accent-color fields: (a) migration adding logo_url TEXT nullable and
+    accent_color TEXT nullable (with CHECK constraint limiting to safe hex/named CSS
+    values), (b) UI on the restaurant show/edit page, (c) display in public menu page.
+    Keep to smallest increment: add migration + edit form first; public menu display
+    can be step 2 if the form grows too large.
