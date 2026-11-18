@@ -1727,3 +1727,41 @@ one rather than deferring that migration.
     values), (b) UI on the restaurant show/edit page, (c) display in public menu page.
     Keep to smallest increment: add migration + edit form first; public menu display
     can be step 2 if the form grows too large.
+
+- 2026-11-18 (evening): Branding fields UI — Milestone 6 open item (commit 61b0090).
+  Added `logo_url` and `accent_color` to the restaurant owner dashboard:
+  - Migration `20261118000000_add_accent_color_check.sql`: adds CHECK constraint
+    `accent_color ~ '^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$'` to the existing nullable
+    column (added without constraint by the earlier `20260713000000` migration).
+  - `src/restaurants.rs`: `update_branding()` handler — validates accent_color as
+    #RGB/#RRGGBB only via `is_valid_hex_color()`, validates logo_url as http/https prefix
+    or empty; guarded UPDATE (`id AND owner_id`); `show()` now fetches accent_color and
+    logo_url; two CSRF tokens per page.
+  - `templates/restaurant_show.html`: branding section with current color swatch/logo
+    display and save form.
+  - `src/main.rs`: `POST /restaurants/{id}/branding` route added.
+  `cargo build`, `cargo clippy --locked -D warnings`, `cargo fmt --check` clean.
+  - Oracle verdict: **approved / proceed to public menu branding display** (confidence
+    high). "Proceed to public-menu branding implementation; I found no blocking
+    tenant-isolation, CSS-injection, or XSS flaw in the reviewed paths. update_branding()
+    binds the authenticated session user to WHERE id = $3 AND owner_id = $4, so another
+    owner's restaurant cannot be updated and returns 404. is_valid_hex_color() correctly
+    accepts only ASCII #RGB/#RRGGBB, safely handles arbitrary UTF-8, and matches the
+    CHECK constraint's intended grammar. The literal HTTP(S) prefix check prevents
+    JavaScript-scheme injection, while Askama's HTML escaping protects the quoted src
+    attribute." Non-blocking notes:
+    1. Low — incomplete URL validation: `https://` prefix lets through malformed URLs
+       like `https://[invalid`; uppercase `HTTPS://` fails. Not an XSS bypass but
+       oracle recommends replacing with `url::Url::parse` (same pattern as validate_base_url).
+    2. Conditional deployment blocker — existing non-hex accent_color values in a
+       pre-existing DB will cause the CHECK migration to fail at startup. No shared DB
+       exists yet; note for deployment phase (can add a data-cleanup step or coordinate
+       with M7's deployment notes when needed).
+    3. HTML escaping alone does not prevent CSS injection — the hex-only restriction
+       provides that protection; must keep accent_color free of `|safe`.
+  - Next run: proceed to **public menu branding display** (M6 step 2). In `src/menu.rs`:
+    fetch `accent_color` and `logo_url` from the restaurants row in `public_menu`; pass
+    into `MenuPage` template struct. In `templates/menu.html`: display logo if set
+    (img tag, Askama auto-escaping), apply accent_color as a CSS variable on the page root
+    (safe because hex-only restriction). Optionally upgrade logo_url validation to
+    `url::Url::parse` (oracle recommended, low risk — fold into this step if small).
