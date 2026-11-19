@@ -1765,3 +1765,42 @@ one rather than deferring that migration.
     (img tag, Askama auto-escaping), apply accent_color as a CSS variable on the page root
     (safe because hex-only restriction). Optionally upgrade logo_url validation to
     `url::Url::parse` (oracle recommended, low risk — fold into this step if small).
+
+- 2026-11-19: M6 branding display on public menu page (commit 5a04285). Three changes:
+  (a) `src/menu.rs`: extended the restaurants SELECT to also fetch `accent_color` and
+      `logo_url`; added both fields to `MenuPage` struct; filtered empty strings from
+      both before passing into the template.
+  (b) `templates/menu.html`: added `:root{--accent:#333}` CSS default, overridden by a
+      second `<style>` block when `accent_color` is Some (Askama auto-escapes `{{ color }}`
+      in the CSS context); added `.logo` class and an `<img>` tag before `<h1>` when
+      `logo_url` is Some; `<h1>` and `<h2>` now use `color:var(--accent)` and
+      `border-bottom:2px solid var(--accent)`.
+  (c) `src/restaurants.rs`: upgraded `logo_url` input validation from `starts_with()`
+      prefix check to `url::Url::parse` with explicit scheme/host/no-credentials/no-query/
+      no-fragment guards — same pattern as `validate_base_url` and
+      `validate_s3_public_base_url`, resolving the oracle's earlier flagged weak check.
+  `cargo build`, `cargo clippy --locked -- -D warnings`, `cargo fmt -- --check` all clean.
+  - Oracle verdict: **approved / next run may proceed to new work** (confidence high).
+    "Approve 5a04285 for continued development, subject to green CI; I found no blocking
+    injection or tenant-isolation defect. (a) The CSS insertion is safe because the
+    enforced hex grammar excludes CSS syntax — not because Askama performs CSS escaping.
+    (b) The quoted, HTML-escaped img src is safe against attribute injection under the
+    HTTP(S) validation. (c) url::Url::parse closes the previously identified malformed-host
+    concern, including https://[invalid, although it accepts some recoverable syntax. The
+    next run may proceed to new work." Non-blocking notes:
+    1. Medium: `#fff` or other light hex colors make h1/h2 invisible on a white background
+       — contrast not enforced by the validator. Consider applying accent only to borders/
+       decorative elements, or clamping to a contrast-safe range.
+    2. Low: `update_branding()` validates `Url::parse(logo)` but stores the original `logo`
+       string; parser normalizations are not reflected in stored value. Not an XSS exploit,
+       but storing `parsed.to_string()` would be more consistent.
+    3. Low: query strings on logo URLs are rejected (breaks CDN transformation/signed
+       image URLs). Consider whether this is the intended policy.
+  - Next run: proceed to **new work**. Options:
+    (a) Fix heading contrast issue (apply accent to borders/hr only, not text color) —
+        small template change, addresses oracle's Medium risk.
+    (b) Store `parsed.to_string()` instead of `logo` in `update_branding()` —
+        small code cleanup.
+    (c) Allow query strings in logo URL validation (if CDN signed URLs are desired).
+    Recommendation: **(a) contrast fix** first (small, removes the Medium risk the oracle
+    flagged), then **(b) canonical storage** as a tidy follow-up.
