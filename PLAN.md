@@ -1804,3 +1804,34 @@ one rather than deferring that migration.
     (c) Allow query strings in logo URL validation (if CDN signed URLs are desired).
     Recommendation: **(a) contrast fix** first (small, removes the Medium risk the oracle
     flagged), then **(b) canonical storage** as a tidy follow-up.
+
+- 2026-11-19 (evening): Branding followup — contrast fix + canonical logo URL storage
+  (commit 4506992). Two small changes addressing oracle non-blocking notes from prior run:
+  (a) `templates/menu.html`: removed `color:var(--accent)` from `h1` and `h2` rules.
+      Accent variable now applied only to `h2`'s `border-bottom` (decorative). Heading
+      text color reverts to browser default (near-black), so light accent values like
+      `#fff` no longer make headings invisible.
+  (b) `src/restaurants.rs` `update_branding()`: changed `logo_url` storage from the raw
+      trimmed input to `Url::to_string()` (canonical parser serialization from url 2.5.8).
+      Length check now operates on `canonical.len()` (the stored form). Guards unchanged.
+  `cargo build`, `cargo clippy --locked -- -D warnings`, `cargo fmt -- --check` all clean.
+  - Oracle verdict: **approved / next run may proceed to new work** (confidence high).
+    "Approve 4506992; the next run may proceed to new work. Removing accent-based heading
+    colors adequately fixes the reported contrast problem: headings inherit the document's
+    text color, while the potentially invisible border is decorative. Storing
+    parsed.to_string() introduces no identified correctness or safety regression and aligns
+    storage with validation; checking the serialized length correctly bounds the stored
+    value." Non-blocking notes:
+    1. Verification gap: no tests cover branding updates or heading contrast in this commit.
+    2. Unicode percent-encoding can push canonical URLs over 2,048 bytes despite shorter
+       input (expected behavior of the new stored-length policy, not a bug).
+    3. Query strings remain prohibited — signed/CDN transformation URLs still unsupported
+       (unchanged policy).
+  - **M6 branding is now complete.** All milestones through M7 are feature-complete.
+  - Next run: proceed to **new work**. Remaining open items:
+    (a) Add `update_branding()` regression tests (oracle suggested targeting this function).
+    (b) Allow query strings in logo URL validation if CDN signed URLs are needed (policy
+        decision — deferred until there's a concrete use case).
+    Recommendation: **(a) branding test coverage** — write one or two targeted tests for
+    `update_branding()` (hex color rejection, logo URL canonicalization, tenant isolation).
+    Keeps CI meaningful and addresses the persistent oracle suggestion about test coverage.
