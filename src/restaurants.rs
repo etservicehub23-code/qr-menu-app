@@ -256,7 +256,8 @@ pub async fn update_branding(
     };
 
     // Validate logo_url: must be empty or a well-formed absolute http/https URL.
-    let logo_url: Option<&str> = if logo.is_empty() {
+    // Store the canonical form (Url::to_string()) to avoid parser normalization gaps.
+    let logo_url: Option<String> = if logo.is_empty() {
         None
     } else {
         match Url::parse(logo) {
@@ -268,10 +269,11 @@ pub async fn update_branding(
                     && parsed.query().is_none()
                     && parsed.fragment().is_none() =>
             {
-                if logo.len() > 2048 {
+                let canonical = parsed.to_string();
+                if canonical.len() > 2048 {
                     return Err((StatusCode::BAD_REQUEST, "logo URL is too long"));
                 }
-                Some(logo)
+                Some(canonical)
             }
             _ => {
                 return Err((
