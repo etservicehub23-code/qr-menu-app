@@ -5,6 +5,7 @@ use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Redirect};
 use serde::Deserialize;
 use tower_sessions::Session;
+use url::Url;
 
 #[derive(Template)]
 #[template(path = "restaurant_new.html")]
@@ -254,19 +255,31 @@ pub async fn update_branding(
         ));
     };
 
-    // Validate logo_url: must be empty or an absolute http/https URL.
+    // Validate logo_url: must be empty or a well-formed absolute http/https URL.
     let logo_url: Option<&str> = if logo.is_empty() {
         None
-    } else if logo.starts_with("http://") || logo.starts_with("https://") {
-        if logo.len() > 2048 {
-            return Err((StatusCode::BAD_REQUEST, "logo URL is too long"));
-        }
-        Some(logo)
     } else {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "logo URL must start with http:// or https://",
-        ));
+        match Url::parse(logo) {
+            Ok(parsed)
+                if (parsed.scheme() == "http" || parsed.scheme() == "https")
+                    && parsed.host().is_some()
+                    && parsed.username().is_empty()
+                    && parsed.password().is_none()
+                    && parsed.query().is_none()
+                    && parsed.fragment().is_none() =>
+            {
+                if logo.len() > 2048 {
+                    return Err((StatusCode::BAD_REQUEST, "logo URL is too long"));
+                }
+                Some(logo)
+            }
+            _ => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "logo URL must be a valid http or https URL",
+                ));
+            }
+        }
     };
 
     let rows = sqlx::query(

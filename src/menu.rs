@@ -21,20 +21,24 @@ struct MenuSection {
 struct MenuPage {
     restaurant_name: String,
     sections: Vec<MenuSection>,
+    accent_color: Option<String>,
+    logo_url: Option<String>,
 }
 
 pub async fn public_menu(
     State(state): State<AppState>,
     Path(slug): Path<String>,
 ) -> Result<Html<String>, (StatusCode, &'static str)> {
-    let restaurant: Option<(i64, String)> =
-        sqlx::query_as("SELECT id, name FROM restaurants WHERE slug = $1 AND is_published = true")
-            .bind(&slug)
-            .fetch_optional(&state.pool)
-            .await
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    let restaurant: Option<(i64, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id, name, accent_color, logo_url \
+         FROM restaurants WHERE slug = $1 AND is_published = true",
+    )
+    .bind(&slug)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
 
-    let Some((restaurant_id, restaurant_name)) = restaurant else {
+    let Some((restaurant_id, restaurant_name, accent_color, logo_url)) = restaurant else {
         return Err((StatusCode::NOT_FOUND, "menu not found"));
     };
 
@@ -78,9 +82,15 @@ pub async fn public_menu(
         }
     }
 
+    // Filter empty strings from branding fields stored as NULL or ""
+    let accent_color = accent_color.filter(|s| !s.is_empty());
+    let logo_url = logo_url.filter(|s| !s.is_empty());
+
     let page = MenuPage {
         restaurant_name,
         sections,
+        accent_color,
+        logo_url,
     };
 
     let html = page

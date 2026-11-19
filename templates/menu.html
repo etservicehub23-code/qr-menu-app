@@ -5,9 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ restaurant_name }}</title>
 <style>
+:root{--accent:#333}
 body{font-family:sans-serif;max-width:600px;margin:0 auto;padding:1rem}
-h1{font-size:1.8rem;margin-bottom:.5rem}
-h2{font-size:1.2rem;margin-top:1.5rem;border-bottom:1px solid #ccc;padding-bottom:.2rem}
+h1{font-size:1.8rem;margin-bottom:.5rem;color:var(--accent)}
+h2{font-size:1.2rem;margin-top:1.5rem;border-bottom:2px solid var(--accent);padding-bottom:.2rem;color:var(--accent)}
 ul.items{list-style:none;padding:0;margin:0}
 ul.items li{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;padding:.5rem 0;border-bottom:1px solid #eee;gap:.5rem}
 .item-thumb{width:56px;height:56px;object-fit:cover;border-radius:4px;flex-shrink:0}
@@ -15,9 +16,12 @@ ul.items li{display:flex;flex-wrap:wrap;justify-content:space-between;align-item
 .name{font-weight:bold}
 .price{color:#555;white-space:nowrap;margin-left:1rem}
 p.desc{margin:.2rem 0 0;font-size:.9rem;color:#666}
+.logo{display:block;max-height:80px;max-width:200px;margin-bottom:.75rem;object-fit:contain}
 </style>
+{% match accent_color %}{% when Some with (color) %}<style>:root{--accent:{{ color }}}</style>{% when None %}{% endmatch %}
 </head>
 <body>
+{% match logo_url %}{% when Some with (url) %}<img class="logo" src="{{ url }}" alt="{{ restaurant_name }} logo">{% when None %}{% endmatch %}
 <h1>{{ restaurant_name }}</h1>
 {% if sections.is_empty() %}
 <p>No items available yet.</p>
