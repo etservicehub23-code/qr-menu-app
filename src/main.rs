@@ -279,6 +279,11 @@ async fn main() {
             "/restaurants/{id}/categories/new",
             get(categories::new_form).post(categories::create),
         )
+        .route(
+            "/categories/{id}/edit",
+            get(categories::edit_form).post(categories::edit),
+        )
+        .route("/categories/{id}/delete", post(categories::delete))
         .route("/categories/{id}/items", get(items::list))
         .route(
             "/categories/{id}/items/new",
