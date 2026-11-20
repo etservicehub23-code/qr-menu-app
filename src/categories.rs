@@ -184,39 +184,60 @@ async fn apply_category_name_update(
     .await
 }
 
-/// Production SQL for deleting a category with photo cleanup, shared by the handler and tests.
-/// Returns the photo_url values of items that were cascaded away so callers can clean up S3.
+/// Deletes a category inside a serializable transaction, collecting item photo_urls atomically.
+///
+/// Locks the category row (verifying ownership) and all its item rows with FOR UPDATE before
+/// collecting photo_urls and deleting. This closes the race where a concurrent upload commits
+/// a new photo_url between collection and deletion.
+///
+/// Returns `None` when the category is not found or not owned by `owner_id`.
+/// Returns `Some((restaurant_id, photo_urls))` on success; `photo_urls` may contain `None`
+/// entries for items without photos.
 async fn apply_category_delete(
     pool: &sqlx::PgPool,
     category_id: i64,
     owner_id: i64,
-) -> Result<(sqlx::postgres::PgQueryResult, Vec<Option<String>>), sqlx::Error> {
-    // Collect item photo_urls before the cascade removes the rows.
-    let photo_urls: Vec<Option<String>> = sqlx::query_scalar(
-        "SELECT mi.photo_url
-         FROM menu_items mi
-         JOIN menu_categories mc ON mc.id = mi.category_id
+) -> Result<Option<(i64, Vec<Option<String>>)>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    // Lock the category row and verify ownership in one step.
+    let restaurant_id: Option<i64> = sqlx::query_scalar(
+        "SELECT mc.restaurant_id
+         FROM menu_categories mc
          JOIN restaurants r ON r.id = mc.restaurant_id
-         WHERE mc.id = $1 AND r.owner_id = $2",
+         WHERE mc.id = $1 AND r.owner_id = $2
+         FOR UPDATE",
     )
     .bind(category_id)
     .bind(owner_id)
-    .fetch_all(pool)
+    .fetch_optional(&mut *tx)
     .await?;
 
-    let result = sqlx::query(
-        "DELETE FROM menu_categories
-         USING restaurants r
-         WHERE menu_categories.id = $1
-           AND menu_categories.restaurant_id = r.id
-           AND r.owner_id = $2",
-    )
-    .bind(category_id)
-    .bind(owner_id)
-    .execute(pool)
-    .await?;
+    let restaurant_id = match restaurant_id {
+        Some(id) => id,
+        None => {
+            tx.rollback().await.ok();
+            return Ok(None);
+        }
+    };
 
-    Ok((result, photo_urls))
+    // Lock existing item rows and collect their photo_urls.
+    // Locks prevent a concurrent upload from replacing a photo_url between here and DELETE.
+    let photo_urls: Vec<Option<String>> =
+        sqlx::query_scalar("SELECT photo_url FROM menu_items WHERE category_id = $1 FOR UPDATE")
+            .bind(category_id)
+            .fetch_all(&mut *tx)
+            .await?;
+
+    // Ownership already confirmed by the FOR UPDATE lock above.
+    sqlx::query("DELETE FROM menu_categories WHERE id = $1")
+        .bind(category_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+
+    Ok(Some((restaurant_id, photo_urls)))
 }
 
 #[derive(Template)]
@@ -308,20 +329,16 @@ pub async fn delete(
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
     let user_id = require_auth(&session).await?;
     verify_csrf_token(&session, &form.authenticity_token).await?;
-    let (restaurant_id, _) = require_category_owner_by_id(&state.pool, id, user_id).await?;
 
-    let (result, photo_urls) = apply_category_delete(&state.pool, id, user_id)
+    let (restaurant_id, photo_urls) = apply_category_delete(&state.pool, id, user_id)
         .await
         .map_err(|_| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to delete category",
             )
-        })?;
-
-    if result.rows_affected() == 0 {
-        return Err((StatusCode::NOT_FOUND, "category not found"));
-    }
+        })?
+        .ok_or((StatusCode::NOT_FOUND, "category not found"))?;
 
     // Best-effort cleanup of S3 objects for items that were cascade-deleted.
     for url in photo_urls.into_iter().flatten() {
@@ -423,36 +440,85 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "./migrations")]
-    async fn category_delete_authorized_succeeds(pool: PgPool) {
+    async fn category_delete_returns_item_photo_urls(pool: PgPool) {
         let (owner_id, _, cat_id) =
-            seed_user_restaurant_category(&pool, "del-ok@test", "del-ok").await;
-        let (result, _) = apply_category_delete(&pool, cat_id, owner_id)
+            seed_user_restaurant_category(&pool, "del-photos@test", "del-photos").await;
+
+        // Seed two items: one with a photo, one without.
+        sqlx::query(
+            "INSERT INTO menu_items (category_id, name, price_cents, sort_order, photo_url)
+             VALUES ($1, 'Soup', 500, 0, 'http://s3/bucket/item-1.jpg'),
+                    ($1, 'Bread', 200, 1, NULL)",
+        )
+        .bind(cat_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let result = apply_category_delete(&pool, cat_id, owner_id)
             .await
             .unwrap();
-        assert_eq!(result.rows_affected(), 1);
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM menu_categories WHERE id = $1")
-            .bind(cat_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(count, 0);
+
+        let (_, mut photo_urls) = result.expect("delete should succeed");
+        photo_urls.sort();
+        assert_eq!(
+            photo_urls,
+            vec![None, Some("http://s3/bucket/item-1.jpg".to_string())]
+        );
+
+        // Category and both items should be gone.
+        let cat_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM menu_categories WHERE id = $1")
+                .bind(cat_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(cat_count, 0);
+
+        let item_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM menu_items WHERE category_id = $1")
+                .bind(cat_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(item_count, 0);
     }
 
     #[sqlx::test(migrations = "./migrations")]
-    async fn category_delete_cross_tenant_rejected(pool: PgPool) {
+    async fn category_delete_cross_tenant_rejected_with_items(pool: PgPool) {
         let (_, _, cat_id) =
             seed_user_restaurant_category(&pool, "del-owner@test", "del-owner").await;
+        sqlx::query(
+            "INSERT INTO menu_items (category_id, name, price_cents, sort_order, photo_url)
+             VALUES ($1, 'Target', 100, 0, 'http://s3/bucket/target.jpg')",
+        )
+        .bind(cat_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
         let (other_owner_id, _, _) =
             seed_user_restaurant_category(&pool, "del-other@test", "del-other").await;
-        let (result, _) = apply_category_delete(&pool, cat_id, other_owner_id)
+
+        // Cross-tenant attempt must return None (not found) and leave data intact.
+        let result = apply_category_delete(&pool, cat_id, other_owner_id)
             .await
             .unwrap();
-        assert_eq!(result.rows_affected(), 0);
+        assert!(result.is_none(), "cross-tenant delete must return None");
+
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM menu_categories WHERE id = $1")
             .bind(cat_id)
             .fetch_one(&pool)
             .await
             .unwrap();
         assert_eq!(count, 1);
+
+        let item_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM menu_items WHERE category_id = $1")
+                .bind(cat_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(item_count, 1);
     }
 }
