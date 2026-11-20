@@ -309,7 +309,7 @@ pub async fn update_branding(
 }
 
 /// Returns true if s is a valid CSS hex color: #RGB or #RRGGBB (case-insensitive).
-fn is_valid_hex_color(s: &str) -> bool {
+pub(crate) fn is_valid_hex_color(s: &str) -> bool {
     let bytes = s.as_bytes();
     match bytes.len() {
         4 => bytes[0] == b'#' && bytes[1..].iter().all(|b| b.is_ascii_hexdigit()),
@@ -325,4 +325,33 @@ pub async fn require_auth(session: &Session) -> Result<i64, (StatusCode, &'stati
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "session error"))?
         .ok_or((StatusCode::UNAUTHORIZED, "you must be logged in"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_valid_hex_color;
+
+    #[test]
+    fn hex_color_valid() {
+        assert!(is_valid_hex_color("#abc"));
+        assert!(is_valid_hex_color("#ABC"));
+        assert!(is_valid_hex_color("#aabbcc"));
+        assert!(is_valid_hex_color("#AABBCC"));
+        assert!(is_valid_hex_color("#1a2b3c"));
+        assert!(is_valid_hex_color("#fff"));
+        assert!(is_valid_hex_color("#000000"));
+    }
+
+    #[test]
+    fn hex_color_invalid() {
+        assert!(!is_valid_hex_color(""));
+        assert!(!is_valid_hex_color("abc"));
+        assert!(!is_valid_hex_color("#ab"));
+        assert!(!is_valid_hex_color("#abcde"));
+        assert!(!is_valid_hex_color("#gggggg"));
+        assert!(!is_valid_hex_color("#GGG"));
+        assert!(!is_valid_hex_color("# aabbcc"));
+        assert!(!is_valid_hex_color("##aabbcc"));
+        assert!(!is_valid_hex_color("#aabbccdd")); // 8-digit not accepted
+    }
 }

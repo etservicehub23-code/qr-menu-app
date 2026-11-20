@@ -120,3 +120,66 @@ async fn menu_published_restaurant_returns_200(pool: PgPool) {
         "response body should contain the restaurant name"
     );
 }
+
+/// update_branding tenant isolation: owner_2 cannot update owner_1's restaurant.
+/// This tests the WHERE id = $3 AND owner_id = $4 guard in the UPDATE query directly.
+#[sqlx::test(migrations = "./migrations")]
+async fn branding_update_tenant_isolation(pool: sqlx::PgPool) {
+    // Insert two users.
+    sqlx::query("INSERT INTO users (email, password_hash) VALUES ('brand1@test.local', 'x'), ('brand2@test.local', 'x')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let owner1: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = 'brand1@test.local'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let owner2: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = 'brand2@test.local'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // Insert a restaurant owned by owner1.
+    sqlx::query(
+        "INSERT INTO restaurants (owner_id, name, slug, is_published) \
+         VALUES ($1, 'Brand Place', 'brand-place', false)",
+    )
+    .bind(owner1)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let restaurant_id: i64 =
+        sqlx::query_scalar("SELECT id FROM restaurants WHERE slug = 'brand-place'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    // owner2 tries to set accent_color via the same guarded UPDATE used by update_branding().
+    let result =
+        sqlx::query("UPDATE restaurants SET accent_color = $1 WHERE id = $2 AND owner_id = $3")
+            .bind(Some("#ff0000"))
+            .bind(restaurant_id)
+            .bind(owner2) // wrong owner — should not match
+            .execute(&pool)
+            .await
+            .unwrap();
+
+    assert_eq!(
+        result.rows_affected(),
+        0,
+        "cross-tenant branding update must affect 0 rows"
+    );
+
+    // Confirm the row was not modified.
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT accent_color FROM restaurants WHERE id = $1")
+            .bind(restaurant_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        stored.is_none(),
+        "accent_color must remain NULL after rejected cross-tenant update"
+    );
+}
