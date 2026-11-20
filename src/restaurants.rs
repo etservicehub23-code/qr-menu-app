@@ -284,22 +284,14 @@ pub async fn update_branding(
         }
     };
 
-    let rows = sqlx::query(
-        "UPDATE restaurants SET accent_color = $1, logo_url = $2
-         WHERE id = $3 AND owner_id = $4",
-    )
-    .bind(accent_color)
-    .bind(logo_url)
-    .bind(id)
-    .bind(user_id)
-    .execute(&state.pool)
-    .await
-    .map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "failed to update branding",
-        )
-    })?;
+    let rows = apply_branding_update(&state.pool, id, user_id, accent_color, logo_url.as_deref())
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to update branding",
+            )
+        })?;
 
     if rows.rows_affected() == 0 {
         return Err((StatusCode::NOT_FOUND, "restaurant not found"));
@@ -308,8 +300,29 @@ pub async fn update_branding(
     Ok(Redirect::to(&format!("/restaurants/{id}")))
 }
 
+/// Executes the guarded branding UPDATE; returns the query result.
+/// Shared by the handler and tests so they exercise identical SQL.
+async fn apply_branding_update(
+    pool: &sqlx::PgPool,
+    restaurant_id: i64,
+    owner_id: i64,
+    accent_color: Option<&str>,
+    logo_url: Option<&str>,
+) -> Result<sqlx::postgres::PgQueryResult, sqlx::Error> {
+    sqlx::query(
+        "UPDATE restaurants SET accent_color = $1, logo_url = $2
+         WHERE id = $3 AND owner_id = $4",
+    )
+    .bind(accent_color)
+    .bind(logo_url)
+    .bind(restaurant_id)
+    .bind(owner_id)
+    .execute(pool)
+    .await
+}
+
 /// Returns true if s is a valid CSS hex color: #RGB or #RRGGBB (case-insensitive).
-pub(crate) fn is_valid_hex_color(s: &str) -> bool {
+fn is_valid_hex_color(s: &str) -> bool {
     let bytes = s.as_bytes();
     match bytes.len() {
         4 => bytes[0] == b'#' && bytes[1..].iter().all(|b| b.is_ascii_hexdigit()),
@@ -329,7 +342,10 @@ pub async fn require_auth(session: &Session) -> Result<i64, (StatusCode, &'stati
 
 #[cfg(test)]
 mod tests {
-    use super::is_valid_hex_color;
+    use super::{apply_branding_update, is_valid_hex_color};
+    use sqlx::PgPool;
+
+    // ---- is_valid_hex_color unit tests ----
 
     #[test]
     fn hex_color_valid() {
@@ -344,14 +360,145 @@ mod tests {
 
     #[test]
     fn hex_color_invalid() {
+        // Wrong length (can't pass on character check alone)
         assert!(!is_valid_hex_color(""));
-        assert!(!is_valid_hex_color("abc"));
-        assert!(!is_valid_hex_color("#ab"));
-        assert!(!is_valid_hex_color("#abcde"));
-        assert!(!is_valid_hex_color("#gggggg"));
-        assert!(!is_valid_hex_color("#GGG"));
-        assert!(!is_valid_hex_color("# aabbcc"));
-        assert!(!is_valid_hex_color("##aabbcc"));
+        assert!(!is_valid_hex_color("#ab")); // 2 hex chars
+        assert!(!is_valid_hex_color("#abcde")); // 5 hex chars
         assert!(!is_valid_hex_color("#aabbccdd")); // 8-digit not accepted
+
+        // Correct length but no leading '#' — isolates the prefix check
+        assert!(!is_valid_hex_color("xabc")); // length 4, wrong prefix
+        assert!(!is_valid_hex_color("xaabbcc")); // length 7, wrong prefix
+
+        // Correct length and '#' prefix but bad characters — isolates the char check
+        assert!(!is_valid_hex_color("#abg")); // length 4, 'g' is not hex
+        assert!(!is_valid_hex_color("#aabbcg")); // length 7, 'g' is not hex
+        assert!(!is_valid_hex_color("#GGG")); // length 4, 'G' is not hex
+        assert!(!is_valid_hex_color("#GGGGGG")); // length 7, 'G' is not hex
+
+        // Edge cases
+        assert!(!is_valid_hex_color("abc")); // no prefix, wrong length
+        assert!(!is_valid_hex_color("# abc")); // space — wrong prefix at [0] check
+        assert!(!is_valid_hex_color("##aabbcc")); // doubled '#' — wrong prefix check
+    }
+
+    // ---- apply_branding_update integration tests ----
+
+    async fn seed_user_and_restaurant(pool: &PgPool, email: &str, slug: &str) -> (i64, i64) {
+        sqlx::query("INSERT INTO users (email, password_hash) VALUES ($1, 'x')")
+            .bind(email)
+            .execute(pool)
+            .await
+            .unwrap();
+        let owner_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = $1")
+            .bind(email)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO restaurants (owner_id, name, slug, is_published)              VALUES ($1, $2, $3, false)",
+        )
+        .bind(owner_id)
+        .bind(slug) // reuse slug as name for brevity
+        .bind(slug)
+        .execute(pool)
+        .await
+        .unwrap();
+        let restaurant_id: i64 = sqlx::query_scalar("SELECT id FROM restaurants WHERE slug = $1")
+            .bind(slug)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        (owner_id, restaurant_id)
+    }
+
+    /// Cross-tenant rejection: owner2 cannot update owner1's restaurant.
+    #[sqlx::test(migrations = "./migrations")]
+    async fn branding_update_cross_tenant_rejected(pool: PgPool) {
+        let (_, r1_id) = seed_user_and_restaurant(&pool, "brand-a@test", "brand-a").await;
+        let (owner2_id, _) = seed_user_and_restaurant(&pool, "brand-b@test", "brand-b").await;
+
+        let result = apply_branding_update(&pool, r1_id, owner2_id, Some("#ff0000"), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            result.rows_affected(),
+            0,
+            "cross-tenant update must affect 0 rows"
+        );
+
+        // Confirm r1 is unmodified.
+        let stored: Option<String> =
+            sqlx::query_scalar("SELECT accent_color FROM restaurants WHERE id = $1")
+                .bind(r1_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(stored.is_none(), "r1 accent_color must remain NULL");
+    }
+
+    /// Authorized update: the correct owner can update their own restaurant.
+    #[sqlx::test(migrations = "./migrations")]
+    async fn branding_update_authorized_succeeds(pool: PgPool) {
+        let (owner_id, r_id) = seed_user_and_restaurant(&pool, "brand-c@test", "brand-c").await;
+
+        let result = apply_branding_update(
+            &pool,
+            r_id,
+            owner_id,
+            Some("#336699"),
+            Some("https://example.com/logo.png"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            result.rows_affected(),
+            1,
+            "authorized update must affect 1 row"
+        );
+
+        let (ac, lu): (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT accent_color, logo_url FROM restaurants WHERE id = $1")
+                .bind(r_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(ac.as_deref(), Some("#336699"));
+        assert_eq!(lu.as_deref(), Some("https://example.com/logo.png"));
+    }
+
+    /// ID guard: a sibling restaurant owned by the same owner is not affected.
+    #[sqlx::test(migrations = "./migrations")]
+    async fn branding_update_id_guard_isolates_sibling(pool: PgPool) {
+        let (owner_id, r1_id) = seed_user_and_restaurant(&pool, "brand-d@test", "brand-d1").await;
+        // Second restaurant for the same owner — different id.
+        sqlx::query(
+            "INSERT INTO restaurants (owner_id, name, slug, is_published)              VALUES ($1, 'brand-d2', 'brand-d2', false)",
+        )
+        .bind(owner_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let r2_id: i64 = sqlx::query_scalar("SELECT id FROM restaurants WHERE slug = 'brand-d2'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        // Update r1; r2 must remain untouched.
+        let result = apply_branding_update(&pool, r1_id, owner_id, Some("#aabbcc"), None)
+            .await
+            .unwrap();
+        assert_eq!(result.rows_affected(), 1);
+
+        let r2_accent: Option<String> =
+            sqlx::query_scalar("SELECT accent_color FROM restaurants WHERE id = $1")
+                .bind(r2_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(
+            r2_accent.is_none(),
+            "sibling restaurant must not be modified"
+        );
     }
 }
