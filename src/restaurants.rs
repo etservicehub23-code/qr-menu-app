@@ -378,8 +378,8 @@ mod tests {
 
         // Edge cases
         assert!(!is_valid_hex_color("abc")); // no prefix, wrong length
-        assert!(!is_valid_hex_color("# abc")); // space — wrong prefix at [0] check
-        assert!(!is_valid_hex_color("##aabbcc")); // doubled '#' — wrong prefix check
+        assert!(!is_valid_hex_color("# abc")); // length 6 — rejected by length check
+        assert!(!is_valid_hex_color("##aabbcc")); // length 8 — rejected by length check
     }
 
     // ---- apply_branding_update integration tests ----

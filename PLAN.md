@@ -1835,3 +1835,36 @@ one rather than deferring that migration.
     Recommendation: **(a) branding test coverage** — write one or two targeted tests for
     `update_branding()` (hex color rejection, logo URL canonicalization, tenant isolation).
     Keeps CI meaningful and addresses the persistent oracle suggestion about test coverage.
+
+- 2026-11-20: Branding test coverage (commits 68295b7, 2d033f2). After an initial approach
+  (commit 68295b7: hex unit tests + duplicated-SQL isolation test) was flagged by the oracle,
+  the step was revised in-run (commit 2d033f2):
+  - Extracted `apply_branding_update()` as a private helper called by `update_branding()`;
+    tests now call the same helper so changes to the production SQL break the tests.
+  - Strengthened `hex_color_invalid` with length-matched cases to independently test prefix
+    and character checks: `"xabc"` / `"xaabbcc"` (correct length, no `#`) and
+    `"#abg"` / `"#aabbcg"` / `"#GGG"` / `"#GGGGGG"` (correct length + `#`, bad char).
+  - Reverted `pub(crate)` to `fn` (child test module can access private functions directly).
+  - Three `#[sqlx::test]` tests: cross-tenant rejection (0 rows_affected + NULL stored),
+    authorized success (1 row, correct values), sibling ID guard (sibling unmodified).
+  - Also fixed two misleading comments in `hex_color_invalid` (small follow-up edit in
+    commit for PLAN.md).
+  - `cargo build`, `cargo clippy --locked -D warnings`, `cargo fmt --check` clean.
+  - Oracle verdict (commit 2d033f2): **design approved / proceed to new work after CI**
+    (confidence high). "Commit 2d033f2 resolves both original concerns by inspection.
+    `xabc`/`xaabbcc` have valid lengths and entirely hexadecimal suffixes, so they
+    independently exercise the prefix check... Testing `apply_branding_update()` satisfies
+    the production-SQL concern: `update_branding()` calls it, and the helper owns the SQL
+    and bindings." Non-blocking notes:
+    1. Test execution unverified (CI will run `cargo test --locked` with Postgres).
+    2. Handler coverage (session identity, HTTP response mapping) is not covered by helper
+       tests — deferred follow-up, not a blocker.
+  - Next run: proceed to new work once CI is green. Options:
+    (a) Add an authenticated end-to-end test through the branding route (oracle's "best
+        alternative" but noted as follow-up, not a prerequisite).
+    (b) Any remaining open items from prior milestones.
+    Recommendation: **(b) new work** — the persistent open item is a `S3_PUBLIC_BASE_URL`
+    path-stripping cosmetic and the remaining CDN query-string policy question. Neither is
+    blocking. The natural next new feature from the original PLAN.md is integration of
+    remaining analytics (buffered scan counts) or further polish. Wait for CI to confirm
+    tests pass, then pick the next smallest increment.
