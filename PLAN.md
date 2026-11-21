@@ -1868,3 +1868,56 @@ one rather than deferring that migration.
     blocking. The natural next new feature from the original PLAN.md is integration of
     remaining analytics (buffered scan counts) or further polish. Wait for CI to confirm
     tests pass, then pick the next smallest increment.
+
+- 2026-11-21 (morning, cron): Category edit/delete oracle review run. This cron run
+  found 4 unreviewed commits (c8ffe8f, 48944f9, 72947dd, 444650d) in the working tree
+  and repo that had not been oracle-reviewed. The first 3 were committed by Dr. Torres
+  directly:
+  - c8ffe8f: `feat(categories)` — added edit_form GET, edit POST, delete POST handlers
+    in `src/categories.rs`; two new Askama routes wired in `main.rs`; `category_edit.html`
+    template with two CSRF-protected forms; `category_list.html` updated with edit links.
+    Uses `require_category_owner_by_id` (ownership check), `apply_category_name_update`
+    (guarded UPDATE FROM restaurants WHERE owner_id=$3), `apply_category_delete`
+    (transactional FOR UPDATE + cascade delete + photo URL collection).
+  - 48944f9: S3 photo cleanup on category delete; SQL helper extraction; 4 `#[sqlx::test]`
+    tenant isolation + photo URL tests.
+  - 72947dd: Refined `apply_category_delete` doc comment to Read Committed isolation.
+  - 444650d (this run): Restored missing `$1`/`$2` SQL parameter placeholders in the
+    5th test `category_delete_for_update_blocks_concurrent_upload` (broken in working
+    tree); `cargo fmt` applied. `cargo build`, `cargo clippy --locked -D warnings`,
+    `cargo fmt --check` all clean.
+  - Oracle verdict: **flagged / fix concurrency-test coverage before new work** (medium
+    confidence). "The current category edit/delete paths prevent an authenticated owner
+    from modifying another tenant's category. The delete transaction correctly closes the
+    photo-reference race under Read Committed... I found no SQL injection or XSS
+    vulnerability in these handlers or the template. Fix the concurrency-test coverage
+    before moving to new work; no production security blocker was demonstrated."
+    Ranked risks:
+    1. **Medium — race test does not protect the production implementation**: the
+       `category_delete_for_update_blocks_concurrent_upload` test duplicates the
+       locking SQL instead of invoking `apply_category_delete`. Removing the production
+       item lock would leave this test passing. The 80 ms sleep also permits a false
+       positive (upload starts after deletion returns zero without ever blocking).
+    2. **Conditional medium — ownership transfers**: edit UPDATE reads `restaurants.owner_id`
+       without locking the restaurant row; a concurrent ownership transfer is not
+       serialized against it. No transfer/reparenting writes exist currently — not a
+       demonstrated exploit, but worth documenting.
+    3. **Low — S3 cleanup best-effort**: crash after DB commit leaves orphaned photos
+       (acceptable; upload-generated UUID keys prevent external abuse).
+    4. **Low — validation message says "characters" but enforces bytes**: `categories.rs:301`
+       rejects names > 120 bytes; message says "120 characters or fewer" — align wording
+       or use `.chars().count()`.
+    Oracle's concrete next actions: "Replace `category_delete_for_update_blocks_concurrent_upload`
+    with synchronized production-path coverage... and correct the byte-limit wording.
+    Then proceed to new work."
+  - Per the working agreement, this counts as a flagged step. Next run must:
+    (a) Fix `category_delete_for_update_blocks_concurrent_upload`: rewrite it to call
+        `apply_category_delete` directly (not duplicate the locking SQL); use a proper
+        synchronization mechanism (tokio channel or mutex) instead of the 80 ms sleep
+        to avoid false positives.
+    (b) Fix the name validation message in `categories.rs` `edit` handler: either change
+        the error string from "120 characters or fewer" to "120 bytes or fewer", or change
+        the check to `name.chars().count() > 120` for true character-based limit.
+    (c) `cargo build`, `cargo clippy --locked -D warnings`, `cargo fmt --check` clean.
+    (d) Run exactly one codex-oracle prompt confirming the race test fix resolves the
+        medium-severity concern and whether new work is now unblocked.
