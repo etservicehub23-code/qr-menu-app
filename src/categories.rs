@@ -184,11 +184,13 @@ async fn apply_category_name_update(
     .await
 }
 
-/// Deletes a category inside a serializable transaction, collecting item photo_urls atomically.
+/// Deletes a category, collecting item photo_urls atomically within a Read Committed transaction.
 ///
-/// Locks the category row (verifying ownership) and all its item rows with FOR UPDATE before
-/// collecting photo_urls and deleting. This closes the race where a concurrent upload commits
-/// a new photo_url between collection and deletion.
+/// Acquires FOR UPDATE locks on the category row (with ownership check via JOIN on restaurants)
+/// and on all item rows in the category. The restaurant row is also locked as a side-effect of
+/// the JOIN; this serializes concurrent deletes of different categories in the same restaurant.
+/// The item locks block concurrent photo uploads from replacing photo_url between collection
+/// and cascade deletion.
 ///
 /// Returns `None` when the category is not found or not owned by `owner_id`.
 /// Returns `Some((restaurant_id, photo_urls))` on success; `photo_urls` may contain `None`
@@ -520,5 +522,88 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(item_count, 1);
+    }
+    /// Verifies that FOR UPDATE on item rows blocks concurrent photo uploads.
+    ///
+    /// A delete transaction acquires item row locks before collecting URLs and committing.
+    /// A concurrent upload UPDATE waits for those locks; when the delete commits the item is
+    /// gone, so the upload returns 0 rows. This test would fail if the FOR UPDATE were removed.
+    #[sqlx::test(migrations = "./migrations")]
+    async fn category_delete_for_update_blocks_concurrent_upload(pool: PgPool) {
+        let (owner_id, _, cat_id) =
+            seed_user_restaurant_category(&pool, "lock-test@test", "lock-test").await;
+        sqlx::query(
+            "INSERT INTO menu_items (category_id, name, price_cents, sort_order, photo_url)
+             VALUES ($1, 'Item', 100, 0, 'http://s3/bucket/old.jpg')",
+        )
+        .bind(cat_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let item_id: i64 = sqlx::query_scalar("SELECT id FROM menu_items WHERE category_id = $1")
+            .bind(cat_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        // Begin the delete transaction and acquire FOR UPDATE locks on category + items.
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query_scalar::<_, i64>(
+            "SELECT mc.restaurant_id
+             FROM menu_categories mc
+             JOIN restaurants r ON r.id = mc.restaurant_id
+             WHERE mc.id = $1 AND r.owner_id = $2
+             FOR UPDATE",
+        )
+        .bind(cat_id)
+        .bind(owner_id)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        let collected: Vec<Option<String>> = sqlx::query_scalar(
+            "SELECT photo_url FROM menu_items WHERE category_id = $1 FOR UPDATE",
+        )
+        .bind(cat_id)
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+        // Collected before any concurrent upload — must still be the original URL.
+        assert_eq!(
+            collected,
+            vec![Some("http://s3/bucket/old.jpg".to_string())]
+        );
+
+        // Spawn a concurrent task that tries to replace the photo_url.
+        // It will block on the item row lock held by tx.
+        let pool2 = pool.clone();
+        let upload_handle = tokio::task::spawn(async move {
+            sqlx::query(
+                "UPDATE menu_items SET photo_url = 'http://s3/bucket/new.jpg' WHERE id = $1",
+            )
+            .bind(item_id)
+            .execute(&pool2)
+            .await
+            .unwrap()
+            .rows_affected()
+        });
+
+        // Sleep briefly so the upload task can get scheduled and block on the PG lock.
+        tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+
+        // Complete the delete — cascade removes the item, then commit releases locks.
+        sqlx::query("DELETE FROM menu_categories WHERE id = $1")
+            .bind(cat_id)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        // Upload unblocks: item was deleted while it waited → 0 rows affected.
+        // If FOR UPDATE were absent, the upload could slip in and return 1, failing this assert.
+        let upload_rows = upload_handle.await.unwrap();
+        assert_eq!(
+            upload_rows, 0,
+            "upload blocked by FOR UPDATE then lost the race: item deleted before update committed"
+        );
     }
 }
