@@ -525,13 +525,15 @@ mod tests {
     }
     /// Verifies that apply_category_delete sees the final photo_url committed by a concurrent upload.
     ///
-    /// An upload simulation holds a row lock on the item (FOR UPDATE) and then changes the
-    /// photo_url before committing. apply_category_delete must block until the upload commits
-    /// and return the new URL — not the stale value it would have read without FOR UPDATE.
+    /// An upload simulation holds a row lock on the item (FOR UPDATE), then writes a new photo_url
+    /// and commits. apply_category_delete must block until the upload commits and return the new
+    /// URL — not the previously committed value it would have read without FOR UPDATE.
     ///
-    /// If the FOR UPDATE is removed from apply_category_delete's photo_url SELECT, it reads
-    /// the uncommitted old URL under Read Committed isolation, then the upload commits with
-    /// the new URL, and the new URL is orphaned. This test would fail in that scenario.
+    /// If the FOR UPDATE is removed from apply_category_delete's item SELECT, delete reads the
+    /// previously committed value (old.jpg) under Read Committed isolation before upload commits,
+    /// then upload commits with new.jpg, and new.jpg is orphaned. The oracle-confirmed fix is to
+    /// use pg_blocking_pids to verify delete is actually blocked before releasing the upload lock,
+    /// eliminating the timing race inherent in sleep-based tests.
     #[sqlx::test(migrations = "./migrations")]
     async fn category_delete_reads_final_url_after_concurrent_upload(pool: PgPool) {
         let (owner_id, _, cat_id) =
@@ -550,22 +552,27 @@ mod tests {
             .await
             .unwrap();
 
-        // Channel: upload simulation signals when it has acquired the item row lock.
-        let (lock_tx, lock_rx) = tokio::sync::oneshot::channel::<()>();
+        // Channel: upload simulation sends its backend PID once the item row lock is acquired.
+        let (lock_tx, lock_rx) = tokio::sync::oneshot::channel::<i32>();
         // Channel: main tells upload simulation to proceed (write new URL and commit).
         let (proceed_tx, proceed_rx) = tokio::sync::oneshot::channel::<()>();
 
-        // Task 1 (upload simulation): acquires row lock, signals, then writes new URL and commits.
+        // Task 1 (upload simulation): acquires row lock, signals with its PID, writes new URL.
         let pool_upload = pool.clone();
         let upload_holder = tokio::spawn(async move {
             let mut tx = pool_upload.begin().await.unwrap();
+            // Get this connection's backend PID so the observer can query pg_blocking_pids.
+            let my_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
             sqlx::query("SELECT id FROM menu_items WHERE id = $1 FOR UPDATE")
                 .bind(item_id)
                 .execute(&mut *tx)
                 .await
                 .unwrap();
-            let _ = lock_tx.send(()); // lock is held — delete will block when it starts
-            let _ = proceed_rx.await; // wait until delete is known to be blocked
+            let _ = lock_tx.send(my_pid); // signal: row lock held, here is my PID
+            let _ = proceed_rx.await; // wait until observer confirms delete is blocked
             sqlx::query(
                 "UPDATE menu_items SET photo_url = 'http://s3/bucket/new.jpg' WHERE id = $1",
             )
@@ -573,11 +580,11 @@ mod tests {
             .execute(&mut *tx)
             .await
             .unwrap();
-            tx.commit().await.unwrap(); // releases lock; delete unblocks and reads new URL
+            tx.commit().await.unwrap(); // releases lock; delete unblocks and sees new URL
         });
 
-        // Wait until upload definitely holds the item lock (channel guarantees ordering).
-        lock_rx.await.unwrap();
+        // Wait until upload definitely holds the item lock and obtain its backend PID.
+        let upload_pid = lock_rx.await.unwrap();
 
         // Task 2: call apply_category_delete — it will block on the item row lock via FOR UPDATE.
         let pool_delete = pool.clone();
@@ -586,29 +593,56 @@ mod tests {
                 async move { apply_category_delete(&pool_delete, cat_id, owner_id).await },
             );
 
-        // Brief yield so Task 2 can start and issue its blocking FOR UPDATE.
-        tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
-
-        // Signal upload to write the new URL and commit — releases the lock.
-        let _ = proceed_tx.send(());
-        upload_holder.await.unwrap();
-
-        // apply_category_delete unblocked and reads the new committed URL.
-        let result = delete_handle.await.unwrap().unwrap();
-        let (_, photo_urls) = result.expect("delete should succeed");
-        // If FOR UPDATE is absent, delete reads old.jpg (uncommitted value under Read Committed).
-        assert_eq!(
-            photo_urls,
-            vec![Some("http://s3/bucket/new.jpg".to_string())],
-            "delete must collect the final committed URL, not the stale pre-upload value"
-        );
-
-        // Category and item are both gone.
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM menu_categories WHERE id = $1")
-            .bind(cat_id)
+        // Poll pg_blocking_pids until at least one session reports being blocked by upload_pid.
+        // This confirms delete has actually issued its FOR UPDATE and is waiting — no timing race.
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+        loop {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out: delete did not block within 5s — FOR UPDATE may be missing"
+            );
+            let blocked: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM pg_stat_activity                  WHERE pg_blocking_pids(pid) @> ARRAY[$1]::integer[]",
+            )
+            .bind(upload_pid)
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(count, 0);
+            if blocked > 0 {
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+        }
+
+        // Delete is confirmed blocked; signal upload to write new URL and commit.
+        let _ = proceed_tx.send(());
+        upload_holder.await.unwrap();
+
+        // apply_category_delete unblocked: must read the final committed URL (new.jpg).
+        // If FOR UPDATE is absent, delete reads the previously committed old.jpg and
+        // the new.jpg written by upload is orphaned — the assert below catches that.
+        let result = delete_handle.await.unwrap().unwrap();
+        let (_, photo_urls) = result.expect("delete should succeed");
+        assert_eq!(
+            photo_urls,
+            vec![Some("http://s3/bucket/new.jpg".to_string())],
+            "delete must collect the final committed URL, not the previously committed value"
+        );
+
+        // Category and item are both gone.
+        let cat_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM menu_categories WHERE id = $1")
+                .bind(cat_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(cat_count, 0);
+        let item_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM menu_items WHERE category_id = $1")
+                .bind(cat_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(item_count, 0);
     }
 }
