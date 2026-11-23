@@ -1921,3 +1921,48 @@ one rather than deferring that migration.
     (c) `cargo build`, `cargo clippy --locked -D warnings`, `cargo fmt --check` clean.
     (d) Run exactly one codex-oracle prompt confirming the race test fix resolves the
         medium-severity concern and whether new work is now unblocked.
+- 2026-11-23: Resolved two oracle-flagged issues from the prior run. Two commits: 8107cc9
+  (chars().count() + initial channel-based race test), e43873a (pg_blocking_pids observer).
+  (a) **chars().count() fix**: changed name.len() > 120 to name.chars().count() > 120 in
+  both create and edit handlers in categories.rs — validation now matches the "120
+  characters or fewer" error message for multi-byte UTF-8 names. Applied to both handlers.
+  (b) **Race test replacement**: replaced category_delete_for_update_blocks_concurrent_upload
+  with category_delete_reads_final_url_after_concurrent_upload which:
+    - Calls apply_category_delete directly (the production function).
+    - Upload simulation acquires SELECT FOR UPDATE on item row, sends its backend PID via
+      channel, waits for proceed signal, then writes new photo_url (new.jpg) and commits.
+    - Spawns apply_category_delete after channel confirms lock is held.
+    - Polls pg_stat_activity WHERE pg_blocking_pids(pid) @> ARRAY[upload_pid]::integer[]
+      with 5-second deadline (5ms poll interval) until at least one session is confirmed
+      blocked — eliminates the sleep-based timing race.
+    - Signals upload to commit only after blocking is confirmed.
+    - Asserts apply_category_delete returns new.jpg (not old.jpg); would fail if FOR UPDATE
+      is removed from apply_category_delete's item photo_url SELECT (without FOR UPDATE,
+      delete reads the previously committed old.jpg under Read Committed).
+    - Added item_count == 0 assertion; corrected "uncommitted" to "previously committed"
+      in comments.
+  cargo build, cargo clippy --locked -D warnings, cargo fmt --check all clean.
+  - Oracle verdict (commit e43873a): **approved / new work unblocked** (confidence high).
+    "The revised test removes the scheduling race and should reliably detect removal of
+    the item SELECT's FOR UPDATE in this fixture. The observer proves a session is
+    blocked by upload... None of these exposes a remaining false-pass race for the
+    specified mutation under the current fixture." Oracle confirmed: without FOR UPDATE,
+    delete reads old.jpg then blocks during cascade deletion, returning old.jpg — the
+    final assertion catches it. Non-blocking notes:
+    1. Observer comment overstates what pg_blocking_pids proves (it confirms blocking, not
+       the specific blocking statement) — the final URL assertion is the actual regression
+       check.
+    2. Deadline check is before .fetch_one().await — does not bound connection acquisition
+       or query execution (acceptable for test infrastructure).
+    3. Observer counts any blocked session (not specifically the delete task's) — reasonable
+       for an isolated fixture; using delete's backend PID would make it explicit.
+  - Next run: proceed to **new work**. Per oracle guidance, the test comment should be
+    corrected to remove the overstatement about pg_blocking_pids (it confirms a session is
+    blocked by upload, not specifically at the FOR UPDATE). This is non-blocking. Options
+    for next work:
+    (a) Fix the observer comment (remove "confirms delete has actually issued its FOR UPDATE"
+        — say instead it confirms a session is blocked by the upload's lock, and the final
+        URL assertion is what verifies FOR UPDATE is present).
+    (b) Any remaining open items (item edit CSRF/tests for the new category routes, etc.).
+    Recommendation: **(a) comment fix** is small and closes the oracle's non-blocking note
+    cleanly; then proceed to new feature work.
