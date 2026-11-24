@@ -1966,3 +1966,36 @@ one rather than deferring that migration.
     (b) Any remaining open items (item edit CSRF/tests for the new category routes, etc.).
     Recommendation: **(a) comment fix** is small and closes the oracle's non-blocking note
     cleanly; then proceed to new feature work.
+
+- 2026-11-24: Observer comment fix (commits 112b4bc, then wording improvement).
+  Fixed the overstatement in the `pg_blocking_pids` observer comment in
+  `src/categories.rs`. Original: "This confirms delete has actually issued its FOR
+  UPDATE and is waiting — no timing race." Revised to: "This confirms a session is
+  blocked by the upload transaction, not which statement is waiting. The final URL
+  assertion verifies delete collects the upload's committed URL; removing FOR UPDATE
+  from the item SELECT would instead return old.jpg." No logic, production code, or
+  test logic changed. `cargo build`, `cargo clippy --locked -D warnings`, `cargo fmt
+  --check` all clean.
+  - Oracle verdict: **approved / proceed to new feature work** (confidence high).
+    "Yes—the revised comment correctly distinguishes observing a blocked session from
+    proving that delete issued FOR UPDATE. PostgreSQL documents pg_blocking_pids as
+    identifying blocking sessions; it does not identify the waiting SQL statement or
+    lock clause. The comment more clearly attributes regression detection to the final
+    URL assertion. Proceed to new feature work; this comment is not a blocker."
+    Non-blocking notes:
+    1. "Verifies FOR UPDATE is present" still slightly overstates what a behavioral
+       test proves — another correct implementation could also pass (adopted the
+       oracle's sharper alternative wording: "removing FOR UPDATE from the item SELECT
+       would instead return old.jpg").
+    2. Observer accepts any session blocked by upload_pid (not specifically the delete
+       backend) — the isolated fixture supports that inference; acceptable.
+    3. Runtime regression sensitivity reasoned but not mutation-tested.
+  - Next run: proceed to **new feature work**. Remaining open items:
+    (a) Item edit/delete tests are not covered by integration tests yet — oracle has
+        noted test coverage as a recurring gap.
+    (b) The `validate_base_url()` regression note (no test preventing future
+        credential re-introduction) is a small deferred item.
+    (c) CDN query string policy in logo URL validation remains an open question.
+    Recommendation: **(a) add item edit/delete integration tests** — matches the
+    pattern established for categories and brings CI closer to meaningful coverage
+    of all CRUD paths.

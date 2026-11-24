@@ -594,8 +594,9 @@ mod tests {
             );
 
         // Poll pg_blocking_pids until at least one session reports being blocked by upload_pid.
-        // This confirms a session is blocked by the upload's lock. The final URL assertion
-        // (new.jpg vs old.jpg below) is what verifies FOR UPDATE is present in the production path.
+        // This confirms a session is blocked by the upload transaction, not which statement is waiting.
+        // The final URL assertion verifies delete collects the upload's committed URL;
+        // removing FOR UPDATE from the item SELECT would instead return old.jpg.
         let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
         loop {
             assert!(
