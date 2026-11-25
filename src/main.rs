@@ -593,11 +593,31 @@ mod validator_tests {
                 "expected Err for bad scheme {input:?}"
             );
         }
+        // Unsupported scheme with embedded credentials — secret must not appear in error.
+        let secret = "BASEURLSCHSECRET";
+        let case = format!("ftp://user:{secret}@example.com");
+        let result = validate_base_url(&case);
+        assert!(result.is_err(), "expected Err for bad scheme with credentials");
+        let err = result.unwrap_err();
+        assert!(
+            !err.contains(secret),
+            "bad-scheme error leaked secret: {err:?}"
+        );
     }
 
     #[test]
     fn base_url_invalid_rejected() {
         assert!(validate_base_url("not-a-url").is_err());
         assert!(validate_base_url("").is_err());
+        // Parse failure with embedded credentials — secret must not appear in error.
+        let secret = "BASEURLPARSESECRET";
+        let case = format!("https://user:{secret}@example.com:invalid");
+        let result = validate_base_url(&case);
+        assert!(result.is_err(), "expected Err for malformed URL with credentials");
+        let err = result.unwrap_err();
+        assert!(
+            !err.contains(secret),
+            "parse-error message leaked secret: {err:?}"
+        );
     }
 }
