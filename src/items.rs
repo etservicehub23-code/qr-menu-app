@@ -455,7 +455,8 @@ mod tests {
     use super::{apply_item_delete, apply_item_edit, apply_item_toggle};
     use sqlx::PgPool;
 
-    /// Seeds: owner + restaurant + category + item. Returns (owner_id, category_id, item_id).
+    /// Seeds a complete owner → restaurant → category → item chain.
+    /// Returns (owner_id, category_id, item_id).
     async fn seed_item(pool: &PgPool, suffix: &str) -> (i64, i64, i64) {
         let email = format!("owner-{suffix}@items.test");
         sqlx::query("INSERT INTO users (email, password_hash) VALUES ($1, 'x')")
@@ -496,8 +497,8 @@ mod tests {
                 .await
                 .unwrap();
         sqlx::query(
-            "INSERT INTO menu_items (category_id, name, price_cents, sort_order) \
-             VALUES ($1, 'Burger', 1200, 0)",
+            "INSERT INTO menu_items (category_id, name, description, price_cents, sort_order) \
+             VALUES ($1, 'Burger', 'Classic burger', 1200, 0)",
         )
         .bind(category_id)
         .execute(pool)
@@ -511,55 +512,51 @@ mod tests {
         (owner_id, category_id, item_id)
     }
 
-    /// Seeds a second owner with no restaurants/items. Returns their user_id.
-    async fn seed_other_owner(pool: &PgPool, suffix: &str) -> i64 {
-        let email = format!("other-{suffix}@items.test");
-        sqlx::query("INSERT INTO users (email, password_hash) VALUES ($1, 'x')")
-            .bind(&email)
-            .execute(pool)
-            .await
-            .unwrap();
-        sqlx::query_scalar("SELECT id FROM users WHERE email = $1")
-            .bind(&email)
-            .fetch_one(pool)
-            .await
-            .unwrap()
-    }
-
-    /// apply_item_edit with the correct owner updates the row and returns the category_id.
+    /// apply_item_edit with the correct owner updates all fields and returns the category_id.
     #[sqlx::test(migrations = "./migrations")]
     async fn item_edit_authorized_succeeds(pool: PgPool) {
         let (owner_id, category_id, item_id) = seed_item(&pool, "edit-ok").await;
-        let result = apply_item_edit(&pool, item_id, owner_id, "Pizza", Some("Cheese"), 1500)
-            .await
-            .unwrap();
+        let result = apply_item_edit(
+            &pool,
+            item_id,
+            owner_id,
+            "Pizza",
+            Some("Cheese pizza"),
+            1500,
+        )
+        .await
+        .unwrap();
         assert_eq!(result, Some(category_id));
-        let (name, price): (String, i32) =
-            sqlx::query_as("SELECT name, price_cents FROM menu_items WHERE id = $1")
+        let (name, desc, price): (String, Option<String>, i32) =
+            sqlx::query_as("SELECT name, description, price_cents FROM menu_items WHERE id = $1")
                 .bind(item_id)
                 .fetch_one(&pool)
                 .await
                 .unwrap();
         assert_eq!(name, "Pizza");
+        assert_eq!(desc.as_deref(), Some("Cheese pizza"));
         assert_eq!(price, 1500);
     }
 
-    /// apply_item_edit with a different owner returns None and leaves the row unchanged.
+    /// apply_item_edit with a different owner (who also owns a separate restaurant/item)
+    /// returns None and leaves the target row unchanged.
     #[sqlx::test(migrations = "./migrations")]
     async fn item_edit_cross_tenant_rejected(pool: PgPool) {
-        let (_owner_id, _category_id, item_id) = seed_item(&pool, "edit-xt").await;
-        let other_id = seed_other_owner(&pool, "edit-xt").await;
+        let (_owner_id, _category_id, item_id) = seed_item(&pool, "edit-xt-a").await;
+        // other owner has their own restaurant + item — guard clause is actually exercised
+        let (other_id, _other_cat, _other_item) = seed_item(&pool, "edit-xt-b").await;
         let result = apply_item_edit(&pool, item_id, other_id, "Hacked", None, 0)
             .await
             .unwrap();
         assert_eq!(result, None);
-        // Row must be unchanged
-        let name: String = sqlx::query_scalar("SELECT name FROM menu_items WHERE id = $1")
-            .bind(item_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let (name, desc): (String, Option<String>) =
+            sqlx::query_as("SELECT name, description FROM menu_items WHERE id = $1")
+                .bind(item_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(name, "Burger");
+        assert_eq!(desc.as_deref(), Some("Classic burger"));
     }
 
     /// apply_item_delete with the correct owner removes the row and returns (category_id, None).
@@ -576,11 +573,12 @@ mod tests {
         assert_eq!(count, 0);
     }
 
-    /// apply_item_delete with a different owner returns None and leaves the row in place.
+    /// apply_item_delete with a different owner (who also owns a separate restaurant/item)
+    /// returns None and leaves the target row in place.
     #[sqlx::test(migrations = "./migrations")]
     async fn item_delete_cross_tenant_rejected(pool: PgPool) {
-        let (_owner_id, _category_id, item_id) = seed_item(&pool, "del-xt").await;
-        let other_id = seed_other_owner(&pool, "del-xt").await;
+        let (_owner_id, _category_id, item_id) = seed_item(&pool, "del-xt-a").await;
+        let (other_id, _other_cat, _other_item) = seed_item(&pool, "del-xt-b").await;
         let result = apply_item_delete(&pool, item_id, other_id).await.unwrap();
         assert_eq!(result, None);
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM menu_items WHERE id = $1")
@@ -617,11 +615,12 @@ mod tests {
         );
     }
 
-    /// apply_item_toggle with a different owner returns None and does not change availability.
+    /// apply_item_toggle with a different owner (who also owns a separate restaurant/item)
+    /// returns None and does not change availability.
     #[sqlx::test(migrations = "./migrations")]
     async fn item_toggle_cross_tenant_rejected(pool: PgPool) {
-        let (_owner_id, _category_id, item_id) = seed_item(&pool, "tog-xt").await;
-        let other_id = seed_other_owner(&pool, "tog-xt").await;
+        let (_owner_id, _category_id, item_id) = seed_item(&pool, "tog-xt-a").await;
+        let (other_id, _other_cat, _other_item) = seed_item(&pool, "tog-xt-b").await;
         let result = apply_item_toggle(&pool, item_id, other_id).await.unwrap();
         assert_eq!(result, None);
         let avail: bool = sqlx::query_scalar("SELECT is_available FROM menu_items WHERE id = $1")
