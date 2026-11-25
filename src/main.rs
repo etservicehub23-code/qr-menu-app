@@ -314,7 +314,7 @@ async fn main() {
 
 #[cfg(test)]
 mod validator_tests {
-    use super::validate_s3_public_base_url;
+    use super::{validate_base_url, validate_s3_public_base_url};
 
     /// Table-driven tests covering rejection and valid canonical output.
     #[test]
@@ -509,5 +509,95 @@ mod validator_tests {
                 .unwrap_or_else(|| panic!("strip_prefix failed for base {base_raw:?}"));
             assert_eq!(recovered, object_key, "roundtrip mismatch for {base_raw:?}");
         }
+    }
+
+    // ---- validate_base_url tests ----
+    // These tests guard against future reintroduction of raw-value echoing in
+    // validate_base_url() error messages (oracle concern from commit d7949dc).
+
+    #[test]
+    fn base_url_valid_inputs_produce_canonical_origin() {
+        let cases: &[(&str, &str)] = &[
+            ("http://localhost:3000", "http://localhost:3000"),
+            ("https://example.com", "https://example.com"),
+            // Port preserved when non-default.
+            ("http://example.com:8080", "http://example.com:8080"),
+            // Default HTTPS port stripped by url crate; path silently dropped from origin.
+            ("https://example.com:443/some/path", "https://example.com"),
+            // Hostname case-normalised.
+            ("https://EXAMPLE.COM", "https://example.com"),
+            // IPv6 host.
+            ("http://[::1]:3000", "http://[::1]:3000"),
+        ];
+        for (input, expected) in cases {
+            let result = validate_base_url(input);
+            assert!(
+                result.is_ok(),
+                "expected Ok for {input:?}, got Err: {:?}",
+                result.err()
+            );
+            assert_eq!(
+                result.unwrap().as_str(),
+                *expected,
+                "canonical mismatch for {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn base_url_credentials_rejected_no_secret_in_error() {
+        let secret = "BASEURLSECRET";
+        let cases = [
+            format!("https://user:{secret}@example.com"),
+            format!("https://{secret}@example.com"), // username = secret
+        ];
+        for case in &cases {
+            let result = validate_base_url(case);
+            assert!(result.is_err(), "expected Err for credential case {case:?}");
+            let err = result.unwrap_err();
+            assert!(
+                !err.contains(secret),
+                "error message leaked secret for {case:?}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn base_url_query_rejected_no_secret_in_error() {
+        let secret = "BASEURLQUERYSECRET";
+        let case = format!("https://example.com?token={secret}");
+        let result = validate_base_url(&case);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(!err.contains(secret), "query error leaked secret: {err:?}");
+    }
+
+    #[test]
+    fn base_url_fragment_rejected_no_secret_in_error() {
+        let secret = "BASEURLFRAGSECRET";
+        let case = format!("https://example.com#{secret}");
+        let result = validate_base_url(&case);
+        assert!(result.is_err(), "expected fragment to be rejected");
+        let err = result.unwrap_err();
+        assert!(
+            !err.contains(secret),
+            "fragment error leaked secret: {err:?}"
+        );
+    }
+
+    #[test]
+    fn base_url_bad_scheme_rejected() {
+        for input in ["ftp://example.com", "file:///etc/passwd"] {
+            assert!(
+                validate_base_url(input).is_err(),
+                "expected Err for bad scheme {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn base_url_invalid_rejected() {
+        assert!(validate_base_url("not-a-url").is_err());
+        assert!(validate_base_url("").is_err());
     }
 }
