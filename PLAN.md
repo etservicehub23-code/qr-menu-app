@@ -1999,3 +1999,39 @@ one rather than deferring that migration.
     Recommendation: **(a) add item edit/delete integration tests** — matches the
     pattern established for categories and brings CI closer to meaningful coverage
     of all CRUD paths.
+
+- 2026-11-25: Item edit/delete/toggle integration tests (commits df6d95f, dc269f2).
+  Extracted three private helper functions from the item mutation handlers and added
+  six #[sqlx::test] integration tests covering tenant isolation for all three paths.
+  - df6d95f: Initial commit — extracted apply_item_edit, apply_item_delete,
+    apply_item_toggle from their handlers; added six tests (authorized + cross-tenant
+    for each). cargo build, clippy -D warnings, fmt --check all clean.
+    Oracle verdict: **flagged / test-only rework** (high confidence). "Request a
+    small test-only rework before proceeding to new work. The six tests cover basic
+    success and rejection, but their fixtures leave a significant tenant-isolation
+    regression undetectable." Blocking issue: seed_other_owner created only a bare
+    user with no restaurant — removing `AND menu_items.category_id = mc.id` from any
+    helper would still pass all cross-tenant tests. Fix: seed the other owner with a
+    full restaurant/category/item chain. Non-blocking: authorized edit test omitted
+    description check, rejection tests didn't assert description was unchanged.
+  - dc269f2: Revision — replaced seed_other_owner (bare user) with a second seed_item
+    call (distinct suffix) so the other owner has a full tenant chain; seeded items
+    with a non-null description; added description to authorized edit and rejection
+    assertions. cargo build, clippy, fmt all clean.
+    Oracle verdict: **approved / proceed to new work** (high confidence, budget 3/24).
+    "Approve this revision for new work, subject to the normal PostgreSQL test run
+    passing. The new fixtures close the specific blind spot: removing AND
+    menu_items.category_id = mc.id now lets the target item join the other owner's
+    category/restaurant, so each helper mutates the target and returns Some(...),
+    failing its cross-tenant test." Non-blocking notes:
+    1. item_edit_cross_tenant_rejected omits price_cents from unchanged-row assertions.
+    2. Authorized description clearing (Some → None) not tested.
+    Both are non-blocking; no production helper changes needed.
+  - Next run: proceed to **new work**. Options:
+    (a) validate_base_url() regression test (no test preventing credential
+        re-introduction, oracle-flagged across multiple reviews).
+    (b) CDN query string policy for logo URL validation (open question).
+    (c) price_cents unchanged-row assertion in item_edit_cross_tenant_rejected
+        (oracle non-blocking note from this run).
+    Recommendation: **(a) validate_base_url regression test** — small, closes a
+    persistent oracle concern, same pattern as the validator_tests in src/main.rs.
