@@ -2035,3 +2035,37 @@ one rather than deferring that migration.
         (oracle non-blocking note from this run).
     Recommendation: **(a) validate_base_url regression test** — small, closes a
     persistent oracle concern, same pattern as the validator_tests in src/main.rs.
+
+- 2026-11-25 (evening): validate_base_url() regression tests (commits 953b919, 7f6aa45).
+  Added six #[sqlx::test]-style unit tests to src/main.rs covering all reachable error
+  branches of validate_base_url() with credential-containing inputs and !err.contains(secret)
+  assertions.
+  - 953b919: Initial test addition — six tests covering valid canonical output, credentials
+    rejected, query rejected, fragment rejected, bad scheme rejected, invalid URL rejected.
+    cargo build, clippy, fmt, all 16 validator tests passing.
+    Oracle verdict: **flagged / test-only rework** (budget 4/24). "Partial pass; do not
+    close the redaction concern or proceed to unrelated work yet." Blocking: bad_scheme and
+    invalid_rejected tests only asserted is_err(), leaving two error branches with no
+    !err.contains(secret) check — reintroducing {raw:?} in those branches would pass all
+    six tests unchanged.
+  - 7f6aa45: Revision — extended base_url_bad_scheme_rejected with ftp://user:BASEURLSCHSECRET@example.com
+    + !err.contains assertion; extended base_url_invalid_rejected with
+    https://user:BASEURLPARSESECRET@example.com:invalid + !err.contains assertion.
+    Mutation testing confirmed both branches are caught. All 16 validator tests pass.
+    Oracle verdict: **approved / new milestone work unblocked** (budget 5/24, high confidence).
+    "Yes—7f6aa45 closes both flagged gaps: the FTP input reaches scheme rejection, and the
+    invalid-port input reaches parse-error handling, each with a credential sentinel and
+    !err.contains(secret). All five reachable error paths now have secret-redaction
+    assertions. New milestone work is unblocked on this redaction issue."
+    Non-blocking notes:
+    1. Host-error guard is unreachable after successful HTTP(S) parsing with locked url 2.5.8.
+    2. Query/fragment tests cannot use userinfo credentials (credentials guard fires first);
+       their existing inputs correctly exercise those branches.
+  - Next run: proceed to **new work**. Open items:
+    (a) CDN query string policy for logo URL validation (validate_s3_public_base_url open
+        question — oracle non-blocking across multiple reviews).
+    (b) price_cents unchanged-row assertion in item_edit_cross_tenant_rejected (oracle
+        non-blocking note from dc269f2 run).
+    (c) Authorized description clearing (Some → None) not tested in item edit tests.
+    Recommendation: **(a) CDN query string policy** — has been deferred longest and is
+    an open architectural question that benefits from oracle input.
