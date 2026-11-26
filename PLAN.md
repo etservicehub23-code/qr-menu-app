@@ -2069,3 +2069,41 @@ one rather than deferring that migration.
     (c) Authorized description clearing (Some → None) not tested in item edit tests.
     Recommendation: **(a) CDN query string policy** — has been deferred longest and is
     an open architectural question that benefits from oracle input.
+- 2026-11-26: CDN query string support for logo URL validation (commit 1addab2).
+  Extracted the inline logo URL validation from `update_branding()` into a
+  `validate_logo_url(raw: &str) -> Result<Option<String>, &'static str>` helper.
+  Removed the `parsed.query().is_none()` guard so CDN signed/transformation URLs
+  (e.g. `?sig=abc&expires=...`) are now accepted. Fragments still rejected.
+  Added 7 unit tests covering: empty → None, plain URL, URL with query string
+  accepted (CDN case), fragment rejected, credentials rejected (error must not
+  contain the secret), non-http scheme rejected, invalid URL rejected.
+  `cargo build`, `cargo clippy --locked -D warnings`, `cargo fmt -- --check` all clean.
+  - Oracle verdict: **approved / proceed to new work** (confidence high).
+    "Allowing query strings is safe in the inspected code path; I found no new
+    injection vulnerability. SQL uses bound parameters, and both logo templates use
+    quoted, escaped HTML attributes; the server does not fetch the logo URL. Proceed
+    to new work after normal checks pass; no security redesign is warranted."
+    Non-blocking notes:
+    1. **Public exposure of signed URLs**: the full URL including query string appears
+       in public menu HTML — visitors can copy the CDN token. Acceptable for a public
+       logo; noted for future CDN policy guidance to owners.
+    2. **Weak regression coverage**: `logo_url_valid_with_query_string` checks only
+       `stored.contains("sig=abc")` — a URL with dropped parameters would still pass.
+       Oracle suggested asserting exact URL preservation (multiple params, percent-encoded
+       chars, length boundary at 2048/2049). Non-blocking.
+    3. **Credential rejection test is effectively trivial**: `validate_logo_url()` returns
+       `&'static str` fixed literals, so the `!err.contains(LOGOSECRET)` assertion can
+       never fail (the literal cannot contain runtime data). The test still correctly
+       verifies that the input is rejected (is_err()), but the credential-exposure guard
+       assertion adds no additional assurance. Oracle notes logs and other layers are not
+       covered. Non-blocking.
+    4. Escaping is the actual XSS boundary: templates use Askama HTML escaping;
+       URL parsing alone does not prevent XSS.
+  - Next run: proceed to **new work**. Remaining open items:
+    (a) Strengthen `logo_url_valid_with_query_string` to assert exact URL preservation
+        (oracle's concrete suggestion — small test-only change, closes the coverage gap).
+    (b) price_cents unchanged-row assertion in item_edit_cross_tenant_rejected (oracle
+        non-blocking note from dc269f2 run).
+    (c) Authorized description clearing (Some → None) not tested in item edit tests.
+    Recommendation: **(a) query string test strengthening** — small test-only commit,
+    closes the oracle's concrete coverage gap from this run.
