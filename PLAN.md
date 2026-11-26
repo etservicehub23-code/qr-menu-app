@@ -2107,3 +2107,29 @@ one rather than deferring that migration.
     (c) Authorized description clearing (Some → None) not tested in item edit tests.
     Recommendation: **(a) query string test strengthening** — small test-only commit,
     closes the oracle's concrete coverage gap from this run.
+- 2026-11-26 (evening): Strengthened logo URL query-string test coverage (commits 0e00af6, 5274721).
+  Replaced weak `stored.contains("sig=abc")` check with an exact round-trip assertion
+  on a URL with multiple params, duplicate keys, and percent-encoded chars (%2B, %26).
+  Added `logo_url_length_boundary` (2048-byte URL accepted with exact stored value
+  match, 2049-byte URL rejected) and `logo_url_username_only_rejected` tests per the
+  prior oracle suggestion. Second commit tightened the 2048-byte acceptance assertion
+  from `is_ok()` to `assert_eq!(result, Ok(Some(url_2048)))`. All 9 logo_url unit
+  tests pass. `cargo clippy --locked -D warnings` and `cargo fmt -- --check` clean.
+  - Oracle verdict: **approved / proceed to new work** (confidence high).
+    "Yes—the additions adequately close the three stated coverage gaps. Exact equality
+    detects query loss, reordering, duplicate removal, and changes to percent encoding
+    for this fixture. The boundary pair catches an off-by-one limit, and username-only
+    credentials independently exercise the username guard. Proceed to new work after
+    the focused tests pass; the remaining improvements are small and nonblocking."
+    Non-blocking notes:
+    1. Consider adding one input whose raw length ≤ 2048 but serialized length > 2048
+       (e.g. via percent-encoding expansion) to explicitly test that canonical-length
+       is what's checked — not raw input length. Deferred.
+    2. The substring assertions are redundant given exact equality, but serve as useful
+       failure messages — acceptable.
+  - Next run: proceed to **new work**. Remaining open items (all non-blocking):
+    (a) price_cents unchanged-row assertion in item_edit_cross_tenant_rejected.
+    (b) Authorized description clearing (Some → None) not tested in item edit tests.
+    (c) Percent-encoding expansion corner case for length boundary (oracle deferred suggestion).
+    Recommendation: **(a) price_cents assertion** — small test-only change, closes the
+    oracle's non-blocking note from the dc269f2 run.
