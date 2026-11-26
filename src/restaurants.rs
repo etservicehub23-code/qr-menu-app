@@ -441,10 +441,10 @@ mod tests {
         let url_2048 = format!("{prefix}{padding}");
         assert_eq!(url_2048.len(), 2048);
         let result = validate_logo_url(&url_2048);
-        assert!(
-            result.is_ok(),
-            "2048-byte URL must be accepted: {:?}",
-            result
+        assert_eq!(
+            result,
+            Ok(Some(url_2048.clone())),
+            "2048-byte URL must be stored exactly"
         );
 
         // A URL whose canonical form is 2049 bytes must be rejected.
