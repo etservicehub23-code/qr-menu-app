@@ -400,8 +400,9 @@ mod tests {
 
     #[test]
     fn logo_url_valid_with_query_string() {
-        // CDN signed URL with query parameters must be accepted.
-        let url = "https://cdn.example.com/logo.jpg?sig=abc&expires=9999999999";
+        // CDN signed URL — multiple params including percent-encoded chars must be
+        // preserved exactly (not dropped or reordered) in the stored canonical form.
+        let url = "https://cdn.example.com/logo.jpg?sig=abc%2B1&expires=9999999999&dup=x&dup=y&plus=%2B&amp=%26";
         let result = validate_logo_url(url);
         assert!(
             result.is_ok(),
@@ -409,10 +410,55 @@ mod tests {
             result
         );
         let stored = result.unwrap().unwrap();
+        // All parameters, including percent-encoded chars, must be preserved verbatim.
         assert!(
-            stored.contains("sig=abc"),
-            "query string preserved in stored URL"
+            stored.contains("sig=abc%2B1"),
+            "percent-encoded + preserved: {stored}"
         );
+        assert!(
+            stored.contains("dup=x&dup=y"),
+            "duplicate params preserved: {stored}"
+        );
+        assert!(
+            stored.contains("plus=%2B"),
+            "percent-encoded & preserved: {stored}"
+        );
+        assert!(
+            stored.contains("amp=%26"),
+            "percent-encoded & preserved: {stored}"
+        );
+        // Exact round-trip: the canonical form must equal the input since there is
+        // nothing to normalize in this URL.
+        assert_eq!(stored, url, "exact URL round-trip must hold");
+    }
+
+    #[test]
+    fn logo_url_length_boundary() {
+        // A URL whose canonical form is exactly 2048 bytes must be accepted.
+        // 36 bytes of fixed prefix: "https://cdn.example.com/logo.png?x="
+        let prefix = "https://cdn.example.com/logo.png?x=";
+        let padding = "a".repeat(2048 - prefix.len());
+        let url_2048 = format!("{prefix}{padding}");
+        assert_eq!(url_2048.len(), 2048);
+        let result = validate_logo_url(&url_2048);
+        assert!(
+            result.is_ok(),
+            "2048-byte URL must be accepted: {:?}",
+            result
+        );
+
+        // A URL whose canonical form is 2049 bytes must be rejected.
+        let url_2049 = format!("{prefix}{}", "a".repeat(2049 - prefix.len()));
+        assert_eq!(url_2049.len(), 2049);
+        let result = validate_logo_url(&url_2049);
+        assert!(result.is_err(), "2049-byte URL must be rejected");
+    }
+
+    #[test]
+    fn logo_url_username_only_rejected() {
+        // Username without password must also be rejected.
+        let result = validate_logo_url("https://user@cdn.example.com/logo.png");
+        assert!(result.is_err(), "username-only credential must be rejected");
     }
 
     #[test]
