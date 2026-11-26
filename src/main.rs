@@ -597,7 +597,10 @@ mod validator_tests {
         let secret = "BASEURLSCHSECRET";
         let case = format!("ftp://user:{secret}@example.com");
         let result = validate_base_url(&case);
-        assert!(result.is_err(), "expected Err for bad scheme with credentials");
+        assert!(
+            result.is_err(),
+            "expected Err for bad scheme with credentials"
+        );
         let err = result.unwrap_err();
         assert!(
             !err.contains(secret),
@@ -613,7 +616,10 @@ mod validator_tests {
         let secret = "BASEURLPARSESECRET";
         let case = format!("https://user:{secret}@example.com:invalid");
         let result = validate_base_url(&case);
-        assert!(result.is_err(), "expected Err for malformed URL with credentials");
+        assert!(
+            result.is_err(),
+            "expected Err for malformed URL with credentials"
+        );
         let err = result.unwrap_err();
         assert!(
             !err.contains(secret),

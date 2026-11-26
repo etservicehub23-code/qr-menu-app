@@ -231,6 +231,8 @@ pub async fn publish_toggle(
 /// Updates accent_color and logo_url for the authenticated owner's restaurant.
 /// accent_color must be empty (clear) or a hex color (#RGB or #RRGGBB).
 /// logo_url must be empty (clear) or an absolute http/https URL.
+/// Query strings are permitted so CDN signed/transformation URLs work.
+/// Fragments are rejected (meaningless in an img src and never sent to the server).
 pub async fn update_branding(
     State(state): State<AppState>,
     session: Session,
@@ -255,34 +257,8 @@ pub async fn update_branding(
         ));
     };
 
-    // Validate logo_url: must be empty or a well-formed absolute http/https URL.
-    // Store the canonical form (Url::to_string()) to avoid parser normalization gaps.
-    let logo_url: Option<String> = if logo.is_empty() {
-        None
-    } else {
-        match Url::parse(logo) {
-            Ok(parsed)
-                if (parsed.scheme() == "http" || parsed.scheme() == "https")
-                    && parsed.host().is_some()
-                    && parsed.username().is_empty()
-                    && parsed.password().is_none()
-                    && parsed.query().is_none()
-                    && parsed.fragment().is_none() =>
-            {
-                let canonical = parsed.to_string();
-                if canonical.len() > 2048 {
-                    return Err((StatusCode::BAD_REQUEST, "logo URL is too long"));
-                }
-                Some(canonical)
-            }
-            _ => {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    "logo URL must be a valid http or https URL",
-                ));
-            }
-        }
-    };
+    let logo_url: Option<String> =
+        validate_logo_url(logo).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
     let rows = apply_branding_update(&state.pool, id, user_id, accent_color, logo_url.as_deref())
         .await
@@ -331,6 +307,30 @@ fn is_valid_hex_color(s: &str) -> bool {
     }
 }
 
+/// Validates a logo URL input: empty string → None, valid http/https URL → Some(canonical).
+/// Query strings are permitted (CDN signed/transformation URLs). Fragments are rejected.
+fn validate_logo_url(raw: &str) -> Result<Option<String>, &'static str> {
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    match Url::parse(raw) {
+        Ok(parsed)
+            if (parsed.scheme() == "http" || parsed.scheme() == "https")
+                && parsed.host().is_some()
+                && parsed.username().is_empty()
+                && parsed.password().is_none()
+                && parsed.fragment().is_none() =>
+        {
+            let canonical = parsed.to_string();
+            if canonical.len() > 2048 {
+                return Err("logo URL is too long");
+            }
+            Ok(Some(canonical))
+        }
+        _ => Err("logo URL must be a valid http or https URL"),
+    }
+}
+
 /// Extracts the authenticated user_id from the session, or returns 401.
 pub async fn require_auth(session: &Session) -> Result<i64, (StatusCode, &'static str)> {
     session
@@ -342,7 +342,7 @@ pub async fn require_auth(session: &Session) -> Result<i64, (StatusCode, &'stati
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_branding_update, is_valid_hex_color};
+    use super::{apply_branding_update, is_valid_hex_color, validate_logo_url};
     use sqlx::PgPool;
 
     // ---- is_valid_hex_color unit tests ----
@@ -380,6 +380,69 @@ mod tests {
         assert!(!is_valid_hex_color("abc")); // no prefix, wrong length
         assert!(!is_valid_hex_color("# abc")); // length 6 — rejected by length check
         assert!(!is_valid_hex_color("##aabbcc")); // length 8 — rejected by length check
+    }
+
+    // ---- validate_logo_url unit tests ----
+
+    #[test]
+    fn logo_url_empty_returns_none() {
+        assert_eq!(validate_logo_url(""), Ok(None));
+    }
+
+    #[test]
+    fn logo_url_valid_no_query() {
+        let result = validate_logo_url("https://cdn.example.com/logo.png");
+        assert_eq!(
+            result,
+            Ok(Some("https://cdn.example.com/logo.png".to_string()))
+        );
+    }
+
+    #[test]
+    fn logo_url_valid_with_query_string() {
+        // CDN signed URL with query parameters must be accepted.
+        let url = "https://cdn.example.com/logo.jpg?sig=abc&expires=9999999999";
+        let result = validate_logo_url(url);
+        assert!(
+            result.is_ok(),
+            "query string should be allowed: {:?}",
+            result
+        );
+        let stored = result.unwrap().unwrap();
+        assert!(
+            stored.contains("sig=abc"),
+            "query string preserved in stored URL"
+        );
+    }
+
+    #[test]
+    fn logo_url_fragment_rejected() {
+        let result = validate_logo_url("https://cdn.example.com/logo.png#section");
+        assert!(result.is_err(), "fragment must be rejected");
+    }
+
+    #[test]
+    fn logo_url_credentials_rejected() {
+        let result = validate_logo_url("https://user:LOGOSECRET@cdn.example.com/logo.png");
+        assert!(result.is_err());
+        // Error must not echo the credential.
+        let err = result.unwrap_err();
+        assert!(
+            !err.contains("LOGOSECRET"),
+            "error must not expose the credential"
+        );
+    }
+
+    #[test]
+    fn logo_url_non_http_scheme_rejected() {
+        assert!(validate_logo_url("ftp://cdn.example.com/logo.png").is_err());
+        assert!(validate_logo_url("javascript:alert(1)").is_err());
+    }
+
+    #[test]
+    fn logo_url_invalid_rejected() {
+        assert!(validate_logo_url("not-a-url").is_err());
+        assert!(validate_logo_url("https://").is_err());
     }
 
     // ---- apply_branding_update integration tests ----
