@@ -549,14 +549,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result, None);
-        let (name, desc): (String, Option<String>) =
-            sqlx::query_as("SELECT name, description FROM menu_items WHERE id = $1")
+        let (name, desc, price): (String, Option<String>, i32) =
+            sqlx::query_as("SELECT name, description, price_cents FROM menu_items WHERE id = $1")
                 .bind(item_id)
                 .fetch_one(&pool)
                 .await
                 .unwrap();
         assert_eq!(name, "Burger");
         assert_eq!(desc.as_deref(), Some("Classic burger"));
+        assert_eq!(price, 1200);
     }
 
     /// apply_item_delete with the correct owner removes the row and returns (category_id, None).
