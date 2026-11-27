@@ -2152,3 +2152,23 @@ one rather than deferring that migration.
     (b) Percent-encoding expansion corner case for length boundary (oracle deferred suggestion).
     Recommendation: **(a) authorized description clearing** — small test-only addition,
     covers the None description case in item edit.
+- 2026-11-27 (evening): Authorized description clearing test (commit 73bf980).
+  Added `item_edit_clears_description` test: seeds item with description='Classic burger',
+  calls apply_item_edit with description=None (authorized owner), asserts returned category_id,
+  then reads back and asserts desc.is_none() + name and price_cents unchanged. Build, clippy,
+  fmt all clean.
+  - Oracle verdict: **approved / proceed to new work** (confidence high).
+    "The test correctly covers Some→None description clearing; proceed to new work once it
+    passes against Postgres. The fixture explicitly inserts 'Classic burger', and
+    SET description=$4 replaces that value. Reading back as Option<String> and asserting
+    is_none() verifies actual persisted NULL. Some(category_id) verifies the success result."
+    Non-blocking notes:
+    1. Implicit precondition: if seed_item starts with NULL, this would silently become None→None.
+       Oracle suggests optionally reading desc before edit and asserting Some("Classic burger").
+       Deferred — low risk, seed_item is stable.
+    2. Tests not executed in oracle's read-only environment (validate with cargo test item_edit_).
+  - Next run: proceed to **new work**. Remaining open items:
+    (a) Percent-encoding expansion corner case for length boundary (oracle deferred suggestion).
+    (b) Any new milestone work.
+    Recommendation: **(a) percent-encoding expansion** test — small test-only change, closes
+    the last oracle deferred suggestion, then milestone work can begin.
