@@ -2133,3 +2133,22 @@ one rather than deferring that migration.
     (c) Percent-encoding expansion corner case for length boundary (oracle deferred suggestion).
     Recommendation: **(a) price_cents assertion** — small test-only change, closes the
     oracle's non-blocking note from the dc269f2 run.
+- 2026-11-27 (morning): price_cents unchanged-row assertion in item_edit_cross_tenant_rejected
+  (commit 0221615). Extended the cross-tenant rejection test to SELECT price_cents and assert
+  it is still 1200 after a rejected apply_item_edit call with price_cents=0. Build, clippy,
+  fmt all clean.
+  - Oracle verdict: **approved / proceed to new work** (confidence high, budget 1/24).
+    "Yes—commit 0221615 correctly and completely closes the stated coverage gap. The test reads
+    the target row's persisted price_cents after rejection and asserts its seeded value, 1200,
+    differs from the attempted value, 0. Together with the existing return-value, name, and
+    description assertions, this covers all three fields edited by apply_item_edit. Proceed to
+    new work once the focused tests pass; no rework is warranted."
+    Non-blocking notes:
+    1. Tests not executed in oracle's read-only environment (validate with cargo test item_edit_).
+    2. apply_item_edit uses ownership predicate inside one SQL UPDATE, not an early-return guard —
+       does not weaken the assertion (oracle confirmed).
+  - Next run: proceed to **new work**. Remaining open items:
+    (a) Authorized description clearing (Some → None) not tested in item edit tests.
+    (b) Percent-encoding expansion corner case for length boundary (oracle deferred suggestion).
+    Recommendation: **(a) authorized description clearing** — small test-only addition,
+    covers the None description case in item edit.
