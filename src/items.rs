@@ -538,6 +538,25 @@ mod tests {
         assert_eq!(price, 1500);
     }
 
+    /// apply_item_edit with the correct owner can clear description to None.
+    #[sqlx::test(migrations = "./migrations")]
+    async fn item_edit_clears_description(pool: PgPool) {
+        let (owner_id, category_id, item_id) = seed_item(&pool, "edit-clear-desc").await;
+        let result = apply_item_edit(&pool, item_id, owner_id, "Burger", None, 1200)
+            .await
+            .unwrap();
+        assert_eq!(result, Some(category_id));
+        let (name, desc, price): (String, Option<String>, i32) =
+            sqlx::query_as("SELECT name, description, price_cents FROM menu_items WHERE id = $1")
+                .bind(item_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(name, "Burger");
+        assert!(desc.is_none(), "description should be NULL after clearing");
+        assert_eq!(price, 1200);
+    }
+
     /// apply_item_edit with a different owner (who also owns a separate restaurant/item)
     /// returns None and leaves the target row unchanged.
     #[sqlx::test(migrations = "./migrations")]
