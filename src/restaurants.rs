@@ -460,18 +460,22 @@ mod tests {
         // (after percent-encoding non-ASCII chars) exceeds 2048 must be rejected.
         // é (U+00E9) is 2 UTF-8 bytes raw but encodes to %C3%A9 (6 bytes).
         // 400 × é = 800 raw bytes; canonical = 400 × 6 = 2400 bytes for the value.
-        // Total: 36-byte prefix + 2400 = 2436 bytes canonical > 2048.
+        // Total: 35-byte prefix + 2400 = 2435 bytes canonical > 2048.
         let raw_url = format!("https://cdn.example.com/logo.png?x={}", "é".repeat(400));
         assert!(
             raw_url.len() < 2048,
             "fixture must have raw length < 2048 (got {})",
             raw_url.len()
         );
-        let result = validate_logo_url(&raw_url);
+        // Verify the canonical form actually expands beyond 2048.
+        let canonical = url::Url::parse(&raw_url).unwrap().to_string();
         assert!(
-            result.is_err(),
-            "URL whose canonical form exceeds 2048 bytes must be rejected"
+            canonical.len() > 2048,
+            "canonical must exceed 2048 (got {})",
+            canonical.len()
         );
+        // Verify the exact error (not just any rejection reason).
+        assert_eq!(validate_logo_url(&raw_url), Err("logo URL is too long"));
     }
 
     #[test]
