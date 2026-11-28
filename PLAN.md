@@ -2204,3 +2204,35 @@ one rather than deferring that migration.
     Recommendation: **(c) small comment fix + exact error message assertion** as the
     final test-cleanup commit, then **(a) buffered analytics** to close the last
     notable PLAN.md open item.
+- 2026-11-28 (evening): Percent-encoding expansion test cleanup (commit 91b8abd).
+  Fixed off-by-one comment in `logo_url_percent_encoding_expansion_rejected`:
+  "36-byte prefix" → "35-byte prefix", "2436 bytes" → "2435 bytes". Added explicit
+  `canonical.len() > 2048` assertion and tightened `is_err()` to exact
+  `assert_eq!(result, Err("logo URL is too long"))` so a mutation of `canonical.len()`
+  to `raw.len()` is unambiguously caught. `cargo build`, `cargo clippy --locked -D
+  warnings`, `cargo fmt -- --check` all clean.
+  - Oracle verdict: **approved / proceed to buffered analytics** (confidence high).
+    "Yes—the expansion-test arithmetic is correct: 35 prefix bytes + 800 raw bytes = 835
+    raw bytes; canonical length is 35 + 2400 = 2435 bytes. The explicit canonical-length
+    assertion and exact Err('logo URL is too long') assertion close the unintended-rejection
+    weakness for this test. Both targeted notes are resolved... No blocking issue; the next
+    run may proceed to buffered scan analytics."
+    Non-blocking notes (oracle budget 3/24):
+    1. `restaurants.rs:438` still says "36 bytes" for the same 35-byte prefix (in the
+       `logo_url_length_boundary` comment) — same off-by-one, cosmetic.
+    2. The 2049-byte boundary test still uses `is_err()` — oracle suggests applying the
+       same exact-error assertion pattern there too. Non-blocking.
+  - Next run: proceed to **buffered scan analytics**. This closes the last PLAN.md open
+    item. The M6 analytics stub uses a per-request `INSERT` into `menu_scans` on every
+    `GET /m/{slug}` load, which PLAN.md originally specified as "sampled/buffered, not a
+    write per request." Implement a buffered approach:
+    (a) Add a `ScanBuffer` (e.g. `Arc<Mutex<HashMap<i64, u32>>>`) to `AppState` —
+        accumulates (restaurant_id → count) in memory.
+    (b) `GET /m/{slug}` increments the in-memory counter only (no DB write per request).
+    (c) A `tokio::spawn` background task flushes counts to `menu_scans` (or a summary
+        table) every N seconds (e.g. 30s).
+    (d) Keep the existing `show()` scan count display working (read from DB, which may lag
+        by up to N seconds — acceptable for an analytics stub).
+    Keep to the smallest first slice: in-memory counter + background flush task. Can defer
+    changing the `menu_scans` schema (e.g. to a counters/summary table) if the existing
+    schema is adequate for batch inserts.
