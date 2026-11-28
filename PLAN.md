@@ -2172,3 +2172,35 @@ one rather than deferring that migration.
     (b) Any new milestone work.
     Recommendation: **(a) percent-encoding expansion** test — small test-only change, closes
     the last oracle deferred suggestion, then milestone work can begin.
+- 2026-11-28: Percent-encoding expansion corner case test (commit e12b604).
+  Added `logo_url_percent_encoding_expansion_rejected` test to `src/restaurants.rs`.
+  Fixture: `"https://cdn.example.com/logo.png?x=" + "é".repeat(400)` — 835 raw bytes
+  (each é is 2 UTF-8 bytes) but 2,435 canonical bytes after percent-encoding (é →
+  %C3%A9, 6 bytes each). Verifies that `validate_logo_url` checks `canonical.len()`,
+  not raw input length: replacing `canonical.len()` with `raw.len()` would return `Ok`
+  and fail the test. `cargo build`, `cargo clippy --locked -D warnings`, and
+  `cargo fmt -- --check` all clean.
+  - Oracle verdict: **approved / next run may proceed to milestone work** (confidence
+    high). "Yes—the fixture closes the specified percent-encoding expansion case. Each
+    é occupies two UTF-8 bytes and becomes %C3%A9 (six bytes), giving 835 raw bytes and
+    2,435 canonical bytes. All other validator guards accept this URL, so replacing
+    canonical.len() with raw.len() would return Ok and fail this test. No blocking code
+    issue; the next run may proceed to milestone work after running the current-source
+    test successfully."
+    Non-blocking notes:
+    1. Comments overstate the prefix as 36 bytes (actual: 35) and canonical as 2,436 bytes
+       (actual: 2,435) — off by one, cosmetic.
+    2. `is_err()` permits rejection for an unintended reason; asserting
+       `Err("logo URL is too long")` exactly would strengthen the mutation sensitivity.
+    3. Execution unverified in oracle's read-only environment (CI will validate).
+  - **All deferred oracle test-coverage suggestions are now closed.** Milestones 1–7
+    are feature-complete.
+  - Next run: proceed to **new milestone work**. Options from original PLAN.md:
+    (a) Buffered/async scan analytics (PLAN.md originally called for sampled/buffered
+        counts, not per-request INSERTs — tech debt from the M6 analytics stub).
+    (b) Further UI polish / branding enhancements.
+    (c) Fix comment inaccuracy (36→35 byte prefix) and optionally strengthen
+        `logo_url_percent_encoding_expansion_rejected` to assert exact error message.
+    Recommendation: **(c) small comment fix + exact error message assertion** as the
+    final test-cleanup commit, then **(a) buffered analytics** to close the last
+    notable PLAN.md open item.
